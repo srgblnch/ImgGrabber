@@ -24,6 +24,32 @@
       </plugin>
     </plugins>
   </build>
+    <dependencies>
+        <dependency>
+            <groupId>net.sourceforge</groupId>
+            <artifactId>OpenCV</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>fr.soleil.lib</groupId>
+            <artifactId>YAT-${aol}-${library}-${mode}</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.sourceforge</groupId>
+            <artifactId>OpenCV</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>fr.soleil.lib</groupId>
+            <artifactId>ISL-${aol}-${library}-${mode}</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>fr.soleil.lib</groupId>
+            <artifactId>YAT4Tango-${aol}-${library}-${mode}</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.sourceforge</groupId>
+            <artifactId>OpenCV</artifactId>
+        </dependency>
+    </dependencies>
   <scm>
     <connection>${scm.connection.cvs.tango-ds}:Instrumentation/CCD/ImgGrabber</connection>
     <developerConnection>${scm.developerConnection.cvs.tango-ds}:Instrumentation/CCD/ImgGrabber</developerConnection>
