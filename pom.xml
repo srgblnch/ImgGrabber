@@ -8,7 +8,7 @@
    </parent>
    <groupId>fr.soleil.device</groupId>
    <artifactId>ImgGrabber-${aol}-${mode}</artifactId>
-   <version>1.6.1</version>
+   <version>1.6.2-SNAPSHOT</version>
    <packaging>nar</packaging>
    <name>ImgGrabber</name>
    <description>ImgGrabber device</description>
@@ -25,28 +25,16 @@
    </build>
    <dependencies>
        <dependency>
-           <groupId>net.sourceforge</groupId>
-           <artifactId>OpenCV</artifactId>
-       </dependency>
-       <dependency>
            <groupId>fr.soleil.lib</groupId>
            <artifactId>YAT-${aol}-${library}-${mode}</artifactId>
-       </dependency>
-       <dependency>
-           <groupId>net.sourceforge</groupId>
-           <artifactId>OpenCV</artifactId>
-       </dependency>
-       <dependency>
-           <groupId>fr.soleil.lib</groupId>
-           <artifactId>ISL-${aol}-${library}-${mode}</artifactId>
        </dependency>
        <dependency>
            <groupId>fr.soleil.lib</groupId>
            <artifactId>YAT4Tango-${aol}-${library}-${mode}</artifactId>
        </dependency>
        <dependency>
-           <groupId>net.sourceforge</groupId>
-           <artifactId>OpenCV</artifactId>
+           <groupId>fr.soleil.lib</groupId>
+           <artifactId>ISL-${aol}-${library}-${mode}</artifactId>
        </dependency>
    </dependencies>
    <scm>
