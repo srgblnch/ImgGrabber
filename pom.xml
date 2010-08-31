@@ -8,7 +8,7 @@
    </parent>
    <groupId>fr.soleil.device</groupId>
    <artifactId>ImgGrabber-${aol}-${mode}</artifactId>
-   <version>1.6.2-SNAPSHOT</version>
+   <version>1.6.4-SNAPSHOT</version>
    <packaging>nar</packaging>
    <name>ImgGrabber</name>
    <description>ImgGrabber device</description>
