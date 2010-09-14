@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>fr.soleil.device</groupId>
+        <artifactId>ImgGrabber</artifactId>
+        <version>1.6.4-SNAPSHOT</version>
+    </parent>
+
+    <groupId>fr.soleil.device.ImgGrabber</groupId>
+    <artifactId>Device-${aol}-${mode}</artifactId>
+
+    <packaging>nar</packaging>
+
+    <name>ImgGrabber</name><!-- use for the name of executable -->
+    <description>ImgGrabber device</description>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.freehep</groupId>
+                <artifactId>freehep-nar-plugin</artifactId>
+                <configuration>
+                    <os>Windows</os>
+                    <output>ds_${project.name}</output>
+                    <libraries>
+                        <library>
+                            <type>executable</type>
+                            <run>false</run>
+                            <args>
+                                <arg>1</arg>
+                            </args>
+                        </library>
+                    </libraries>
+                    <cpp>
+                        <sourceDirectory>src</sourceDirectory>
+                        <includePaths>
+                            <includePath>${project.basedir}/src</includePath>
+                            <includePath>${project.basedir}/include</includePath>
+                        </includePaths>
+                        <excludes>
+                            <exclude>**/IBASourceBypass.*</exclude>
+                        </excludes>
+                    </cpp>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+    <dependencies>
+        <dependency>
+            <groupId>fr.soleil.device.ImgGrabber</groupId>
+            <artifactId>ImgGrabberSL-${aol}-shared-${mode}</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>fr.soleil.lib</groupId>
+            <artifactId>ISL-${aol}-${library}-${mode}</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>fr.soleil.lib</groupId>
+            <artifactId>YAT4Tango-${aol}-${library}-${mode}</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>fr.soleil.lib</groupId>
+            <artifactId>YAT-${aol}-${library}-${mode}</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>fr.soleil.device.ImgGrabber.Plugins</groupId>
+            <artifactId>BaslerPylon-${aol}-shared-${mode}</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>fr.soleil.device.ImgGrabber.Plugins</groupId>
+            <artifactId>IMAQ-${aol}-shared-${mode}</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+    </dependencies>
+
+    <scm>
+        <connection>${scm.connection.cvs.tango-ds}:Instrumentation/CCD/ImgGrabber/Device</connection>
+        <developerConnection>${scm.developerConnection.cvs.tango-ds}:Instrumentation/CCD/ImgGrabber/Device</developerConnection>
+        <url>${scm.url.cvs.tango-ds}/Instrumentation/CCD/ImgGrabber/Device</url>
+    </scm>
+
+    <developers>
+        <developer>
+            <id>malik</id>
+            <name>malik</name>
+            <url>http://controle/</url>
+            <organization>Synchrotron Soleil</organization>
+            <organizationUrl>http://www.synchrotron-soleil.fr</organizationUrl>
+            <roles>
+                <role>manager</role>
+            </roles>
+            <timezone>1</timezone>
+        </developer>
+    </developers>
+
+</project>
