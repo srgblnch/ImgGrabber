@@ -1,4 +1,0 @@
-
-RELEASE_TYPE = OPTIMIZED
-
-include Makefile.linux.base

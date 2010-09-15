@@ -1,5 +1,0 @@
-
-RELEASE_TYPE = DEBUG
-CXXFLAGS_USR+= -DDEBUG
-
-include Makefile.linux.base
