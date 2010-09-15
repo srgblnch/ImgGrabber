@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>fr.soleil.device.ImgGrabber</groupId>
+        <artifactId>Plugins</artifactId>
+        <version>1.6.4-SNAPSHOT</version>
+    </parent>
+
+    <groupId>fr.soleil.device.ImgGrabber.Plugins</groupId>
+    <artifactId>BaslerPylonV2-${aol}-shared-${mode}</artifactId>
+
+    <packaging>nar</packaging>
+    
+    <name>BaslerPylonV2</name> <!-- use for the name of executable -->
+    <description>This plugin allows to control BaslerPylonV2</description>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.freehep</groupId>
+                <artifactId>freehep-nar-plugin</artifactId>
+                <configuration>
+                    <linker>
+                        <libs>
+                            <lib>
+                                <name>pylonbase</name>
+                                <type>shared</type>
+                                <directory>${env.PYLON_ROOT}/lib</directory>
+                            </lib>
+                        </libs>
+                    </linker>
+                    <cpp>
+                        <systemIncludePaths>
+                            <systemIncludePath>${env.PYLON_ROOT}/include</systemIncludePath>
+                            <systemIncludePath>${env.GENICAM_ROOT}/include/genicam</systemIncludePath>
+                        </systemIncludePaths>
+                    </cpp>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

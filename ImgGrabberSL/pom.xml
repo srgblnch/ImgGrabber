@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>fr.soleil.device</groupId>
+        <artifactId>ImgGrabber</artifactId>
+        <version>1.6.4-SNAPSHOT</version>
+    </parent>
+
+    <groupId>fr.soleil.device.ImgGrabber</groupId>
+    <artifactId>ImgGrabberSL-${aol}-shared-${mode}</artifactId>
+
+    <packaging>nar</packaging>
+
+    <name>ImgGrabberSL</name> <!-- use for the name of executable -->
+    <description>ImgGrabber Support Library</description>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.freehep</groupId>
+                <artifactId>freehep-nar-plugin</artifactId>
+                <configuration>
+                    <output>${project.artifactId}</output>
+                    <libraries>
+                        <library>
+                            <type>shared</type>
+                        </library>
+                    </libraries>
+                    <cpp>
+                        <sourceDirectory>src</sourceDirectory>
+                        <includePaths>
+                            <includePath>${basedir}/include</includePath>
+                        </includePaths>
+                    </cpp>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <scm>
+        <connection>${scm.connection.cvs.tango-ds}:Instrumentation/CCD/ImgGrabber/ImgGrabberSL</connection>
+        <developerConnection>${scm.developerConnection.cvs.tango-ds}:Instrumentation/CCD/ImgGrabber/ImgGrabberSL</developerConnection>
+        <url>${scm.url.cvs.tango-ds}/Instrumentation/CCD/ImgGrabber/ImgGrabberSL</url>
+    </scm>
+
+    <developers>
+        <developer>
+            <id>malik</id>
+            <name>malik</name>
+            <url>http://controle/</url>
+            <organization>Synchrotron Soleil</organization>
+            <organizationUrl>http://www.synchrotron-soleil.fr</organizationUrl>
+            <roles>
+                <role>manager</role>
+            </roles>
+            <timezone>1</timezone>
+        </developer>
+    </developers>
+
+    <dependencies>
+        <dependency>
+            <groupId>fr.soleil.lib</groupId>
+            <artifactId>YAT-${aol}-${library}-${mode}</artifactId>
+        </dependency>
+    </dependencies>
+
+</project>

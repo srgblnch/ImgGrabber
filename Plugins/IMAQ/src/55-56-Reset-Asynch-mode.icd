@@ -1,0 +1,114 @@
+CameraFile (5.00) {
+   Manufacturer (Sony)
+   Model (XC-55 Progressive Scan)
+   CreationDate (20000421130436)
+   InterfaceInfo (1409) {
+      AcquisitionWindow (134, 33, 640, 480)
+      BinaryThreshold (0, 255)
+      BitDepth (10)
+      NumComponents (1)
+      NumPhantomComponents (0)
+      SwapRGB (No)
+      CSyncSource (CHANNEL0)
+      FrameTimeout (5000)
+      LUT (Normal)
+      LUTTransform (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+      MaxImageSize (780, 525)
+      ScanType (Area)
+      PixelClockSource (INTERNAL_1X)
+      Scaling (1)
+      SlaveAcqMode (EXT_HV_SYNCH_HLCK_ONLY)
+      OnBoardClock (20.000000)
+      DetectPCLK (Yes)
+      NonContLineEnables (No)
+      FastRearm (No)
+      SwapColumns (No)
+      SynchronizeEnables (No)
+      DisableIORdy (No)
+      AnalogParams {
+         BoardData {
+            AcqWinHeightRef (480)
+            AcqWinWidthRef (640)
+            AcqWinXOffRef (119)
+            AcqWinYOffRef (22)
+            AnalogBandwidth (0)
+            CameraType (0)
+            ClampStart (90)
+            ClampStop (115)
+            ContinuousPG (1)
+            DelayHSYNC (1)
+            DelayVSYNC (0)
+            DSPFilter (0)
+            ProgressiveScan (0)
+            BlackLevel (0.000000)
+            WhiteLevel (0.800000)
+            InternalClk (00.000000)
+         }
+         MicroLinear6431 {
+            CSyncPolarity (0)
+            BlankPolarity (0)
+            ClampPolarity (0)
+            ClockSelect (0)
+            LinePixels (780)
+            LinePixelsRef (780)
+            BurstVal (1)
+            CSyncRaw (0)
+            RawClamp (1)
+            TTLSync (0)
+            Hdelay (102)
+            NoiseGate (1)
+            VCRmode (1)
+            SLEEPmode (0)
+            Threshold (3)
+            VGAmode (0)
+            ClockDiv4 (0)
+            VideoMode (0)
+            ConfigPin3 (0)
+            BlankWidth (1)
+            FreeRunGenLock (0)
+         }
+      }
+      Interlaced (Yes) {
+         Current (No)
+         FirstInSpace (Odd)
+         FirstInTime (Next)
+         Mode (Field)
+      }
+      SignalLevels {
+         PixelClock (TTL, High)
+         CSyncIn (TTL, Low)
+         HSyncIn (TTL, Low)
+         VSyncIn (TTL, Low)
+         CSyncOut (TTL, High)
+         PGOutput (TTL)
+         Trigger0 (TTL)
+         Trigger1 (TTL)
+         Trigger2 (TTL)
+         Trigger3 (TTL)
+      }
+      Tap (0) {
+         Position (Normal)
+         Start (Left, Top)
+      }
+   }
+   Pattern {
+      Action (PG) {
+         Line (0) {
+            Start (Low)
+            289, 2889
+         }
+         Line (1) {
+            Start (Low)
+         }
+         Line (2) {
+            Start (Low)
+         }
+         Line (3) {
+            Start (Low)
+         }
+         Clock (0x78)
+         RepeatSource (Fixed, 1)
+      }
+   }
+}
+
