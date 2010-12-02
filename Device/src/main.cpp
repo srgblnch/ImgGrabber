@@ -1,4 +1,4 @@
-static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentation/CCD/ImgGrabber/Device/src/main.cpp,v 1.4 2010-09-15 16:57:03 vince_soleil Exp $";
+static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentation/CCD/ImgGrabber/Device/src/main.cpp,v 1.5 2010-12-02 13:53:37 vince_soleil Exp $";
 //+=============================================================================
 //
 // file :        main.cpp
@@ -12,9 +12,12 @@ static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentatio
 //
 // $Author: vince_soleil $
 //
-// $Revision: 1.4 $ $
+// $Revision: 1.5 $ $
 //
 // $Log: not supported by cvs2svn $
+// Revision 1.4  2010/09/15 16:57:03  vince_soleil
+// merged from maven migration branch (last commit)
+//
 // Revision 1.1.2.3  2010/04/20 11:28:43  vince_soleil
 // replaced by version from HEAD
 //
@@ -42,13 +45,22 @@ static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentatio
 //#pragma warning( disable: 4250 ) // 'x' inherits 'y' via dominance
 #endif
 
-#include <tango.h>
+#if defined(ENABLE_CRASH_REPORT)
+# include <crashreporting/crash_report.h>
+#else
+# define DECLARE_CRASH_HANDLER
+# define INSTALL_CRASH_HANDLER
+#endif
 
+DECLARE_CRASH_HANDLER;
 
-int main(int argc,char *argv[])
+int main(int argc, char *argv[])
 {
+  INSTALL_CRASH_HANDLER;
 
-	Tango::Util *tg;
+
+	Tango::Util *tg = 0;
+
 	try
 	{
 		// Initialise the device server
