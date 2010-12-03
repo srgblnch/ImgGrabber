@@ -1,4 +1,4 @@
-static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentation/CCD/ImgGrabber/Device/src/main.cpp,v 1.5 2010-12-02 13:53:37 vince_soleil Exp $";
+static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentation/CCD/ImgGrabber/Device/src/main.cpp,v 1.6 2010-12-03 14:08:24 vince_soleil Exp $";
 //+=============================================================================
 //
 // file :        main.cpp
@@ -12,9 +12,12 @@ static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentatio
 //
 // $Author: vince_soleil $
 //
-// $Revision: 1.5 $ $
+// $Revision: 1.6 $ $
 //
 // $Log: not supported by cvs2svn $
+// Revision 1.5  2010/12/02 13:53:37  vince_soleil
+// bug 0017713  : Add breakPad
+//
 // Revision 1.4  2010/09/15 16:57:03  vince_soleil
 // merged from maven migration branch (last commit)
 //
@@ -44,6 +47,8 @@ static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentatio
 #pragma warning( disable: 4312 ) // 'operation' : conversion from 'type1' to 'type2' of greater size 
 //#pragma warning( disable: 4250 ) // 'x' inherits 'y' via dominance
 #endif
+
+#include <tango.h>
 
 #if defined(ENABLE_CRASH_REPORT)
 # include <crashreporting/crash_report.h>
