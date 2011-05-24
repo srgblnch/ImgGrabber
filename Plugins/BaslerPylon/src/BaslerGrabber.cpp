@@ -10,7 +10,7 @@
 #include <pylon/Result.h>
 
 #include <yat/plugin/PlugInSymbols.h>
-#include <yat/Singleton.h>
+#include <yat/utils/Singleton.h>
 #include <yat/threading/Task.h>
 #include <cmath>
 

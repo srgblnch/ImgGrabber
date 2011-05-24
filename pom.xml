@@ -4,12 +4,12 @@
     <parent>
         <groupId>fr.soleil</groupId>
         <artifactId>super-pom-C-CPP-tango</artifactId>
-        <version>RELEASE</version>
+        <version>11.3.0</version>
     </parent>
 
     <groupId>fr.soleil.device</groupId>
     <artifactId>ImgGrabber</artifactId>
-    <version>1.6.4</version>
+    <version>1.6.5</version>
 
     <packaging>pom</packaging>
 
