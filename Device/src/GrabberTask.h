@@ -8,7 +8,7 @@
 #define _GRABAPI_GRABBERTASK_H_
 
 #include <yat/threading/Task.h>
-#include <yat/Signal.h>
+#include <yat/utils/Signal.h>
 #include <IGrabber.h>
 #include <deque>
 

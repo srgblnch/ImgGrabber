@@ -8,9 +8,12 @@
 //
 // $Author: vince_soleil $
 //
-// $Revision: 1.4 $
+// $Revision: 1.5 $
 //
 // $Log: not supported by cvs2svn $
+// Revision 1.4  2010/09/15 16:57:03  vince_soleil
+// merged from maven migration branch (last commit)
+//
 // Revision 1.1.2.4  2010/09/14 13:02:24  anoureddine
 // Avoid a shift of 1 point during scan step by step :
 // - Enhance state management (forcing state to RUNNING when a snap command is launched)
@@ -84,7 +87,7 @@
 #endif
 #include <tango.h>
 #include <list>
-#include <yat/Signal.h>
+#include <yat/utils/Signal.h>
 #include <Tools.h>
 #include "IGrabber.h"
 
@@ -92,7 +95,7 @@
 
 /**
  * @author	$Author: vince_soleil $
- * @version	$Revision: 1.4 $
+ * @version	$Revision: 1.5 $
  */
 
  //	Add your own constants definitions here.
