@@ -7,7 +7,7 @@
 #ifndef _GRABAPI_GRABBERPLUGINMANAGER_H_
 #define _GRABAPI_GRABBERPLUGINMANAGER_H_
 
-#include <yat/Singleton.h>
+#include <yat/utils/Singleton.h>
 #include <yat/plugin/PlugInManager.h>
 
 namespace GrabAPI
