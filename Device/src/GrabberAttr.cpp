@@ -93,6 +93,7 @@ namespace GrabAPI
     try
     {
       this->callbacks_[dev].info.set_cb(container);
+      this->memorize_attribute(dev->name(),att.get_name(),write_value);
     }
     catch( yat::Exception& ex )
     {
@@ -109,6 +110,30 @@ namespace GrabAPI
                       "PlugInAttr<std::string>::write");
     }
   }
+
+  void GrabberAttrT<std::string>::memorize_attribute(std::string devName,
+                                                       std::string attrName,
+                                                       char* write_value)
+    {
+      try
+      {
+        std::cout << "memorize_attribute(" << attrName << "); ";
+        Tango::Database *db = new Tango::Database();
+        Tango::DbData db_data;
+        Tango::DbDatum dev_prop(attrName);
+        dev_prop << write_value;
+        db_data.push_back(dev_prop);
+        db->put_device_property(devName, db_data);
+        std::cout << "value=" << write_value << ";" << std::endl;
+      }
+      catch(...)
+      {
+          std::cout << "Malo!" << std::endl;
+          THROW_DEVFAILED("UNKNOWN_ERROR",
+                          "Tango error during memorize attribute ",
+                          "GrabberAttrT<std::string>::memorize_attribute");
+      }
+    }
 
   bool GrabberAttrT<std::string>::is_allowed (Tango::DeviceImpl *, Tango::AttReqType)
   {
@@ -171,6 +196,18 @@ namespace GrabAPI
 	  case yat::PlugInDataType::UINT32:
         {
           GrabberAttrT<yat_uint32_t>* gat = new GrabberAttrT<yat_uint32_t>(info);
+          a = gat;  da = gat;
+        }
+        break;
+      case yat::PlugInDataType::INT64:
+        {
+          GrabberAttrT<yat_int64_t>* gat = new GrabberAttrT<yat_int64_t>(info);
+          a = gat;  da = gat;
+        }
+        break;
+      case yat::PlugInDataType::UINT64:
+        {
+          GrabberAttrT<yat_uint64_t>* gat = new GrabberAttrT<yat_uint64_t>(info);
           a = gat;  da = gat;
         }
         break;

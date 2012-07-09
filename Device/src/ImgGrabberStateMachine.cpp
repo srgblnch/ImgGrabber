@@ -1,4 +1,4 @@
-static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentation/CCD/ImgGrabber/Device/src/ImgGrabberStateMachine.cpp,v 1.4 2010-09-15 16:57:03 vince_soleil Exp $";
+static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentation/CCD/ImgGrabber/Device/src/ImgGrabberStateMachine.cpp,v 1.5 2012-07-09 13:58:31 sergiblanch Exp $";
 //+=============================================================================
 //
 // file :         ImgGrabberStateMachine.cpp
@@ -8,11 +8,14 @@ static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentatio
 //
 // project :      TANGO Device Server
 //
-// $Author: vince_soleil $
+// $Author: sergiblanch $
 //
-// $Revision: 1.4 $
+// $Revision: 1.5 $
 //
 // $Log: not supported by cvs2svn $
+// Revision 1.4  2010/09/15 16:57:03  vince_soleil
+// merged from maven migration branch (last commit)
+//
 // Revision 1.1.2.3  2010/04/20 11:28:43  vince_soleil
 // replaced by version from HEAD
 //
@@ -293,6 +296,25 @@ bool ImgGrabber::is_SaveSettings_allowed(const CORBA::Any &any)
 		//	End of Generated Code
 
 		//	Re-Start of Generated Code
+	return true;
+}
+
+//+----------------------------------------------------------------------------
+//
+// method : 		ImgGrabber::is_ResetCamera_allowed
+//
+// description : 	Execution allowed for Open command.
+//
+//-----------------------------------------------------------------------------
+bool ImgGrabber::is_ResetCamera_allowed(const CORBA::Any &any)
+{
+//	if (get_state() == Tango::FAULT)
+//	{
+//		//	End of Generated Code
+//
+//		//	Re-Start of Generated Code
+//		return false;
+//	}
 	return true;
 }
 

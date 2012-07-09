@@ -10,11 +10,14 @@
 //			
 // project :      TANGO Device Server
 //
-// $Author: vince_soleil $
+// $Author: sergiblanch $
 //
-// $Revision: 1.4 $
+// $Revision: 1.5 $
 //
 // $Log: not supported by cvs2svn $
+// Revision 1.4  2010/09/15 16:57:03  vince_soleil
+// merged from maven migration branch (last commit)
+//
 // Revision 1.1.2.3  2010/04/20 11:28:43  vince_soleil
 // replaced by version from HEAD
 //
@@ -376,6 +379,29 @@ public:
 	{return (static_cast<ImgGrabber *>(dev))->is_Open_allowed(any);}
 };
 
+
+class ResetCameraClass : public Tango::Command
+{
+public:
+  ResetCameraClass(const char *name,
+                   Tango::CmdArgType in,
+                   Tango::CmdArgType out,
+                   const char *in_desc,
+                   const char *out_desc,
+                   Tango::DispLevel level)
+    :Command(name,in,out,in_desc,out_desc, level)	{};
+
+  ResetCameraClass(const char   *name,
+                   Tango::CmdArgType in,
+                   Tango::CmdArgType out)
+    :Command(name,in,out)	{};
+
+  ~ResetCameraClass() {};
+
+  virtual CORBA::Any *execute (Tango::DeviceImpl *dev, const CORBA::Any &any);
+  virtual bool is_allowed (Tango::DeviceImpl *dev, const CORBA::Any &any)
+    {return (static_cast<ImgGrabber *>(dev))->is_ResetCamera_allowed(any);}
+};
 
 
 //

@@ -1,4 +1,4 @@
-static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentation/CCD/ImgGrabber/Device/src/ImgGrabber.cpp,v 1.4 2010-09-15 16:57:03 vince_soleil Exp $";
+static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentation/CCD/ImgGrabber/Device/src/ImgGrabber.cpp,v 1.5 2012-07-09 13:58:31 sergiblanch Exp $";
 //+=============================================================================
 //
 // file :         ImgGrabber.cpp
@@ -11,11 +11,14 @@ static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentatio
 //
 // project :      TANGO Device Server
 //
-// $Author: vince_soleil $
+// $Author: sergiblanch $
 //
-// $Revision: 1.4 $
+// $Revision: 1.5 $
 //
 // $Log: not supported by cvs2svn $
+// Revision 1.4  2010/09/15 16:57:03  vince_soleil
+// merged from maven migration branch (last commit)
+//
 // Revision 1.1.2.5  2010/09/14 13:02:24  anoureddine
 // Avoid a shift of 1 point during scan step by step :
 // - Enhance state management (forcing state to RUNNING when a snap command is launched)
@@ -136,6 +139,8 @@ static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentatio
 #include <GrabberAttr.h>
 #include <isl/ErrorHandler.h>
 
+#include "MovieWriterTask.h"
+
 #define MAX_STRING_LEN 1024
 
 namespace ImgGrabber_ns
@@ -180,7 +185,18 @@ void ImgGrabber::delete_device()
   // Delete device's allocated object
 
   this->del_image_available_observer(this->image_change_notify_slot);
+  this->del_image_available_observer(this->movie_frame_write_slot);
 
+  if (this->movie_writer_task) {
+    try
+    {
+      this->movie_writer_task->exit();
+      this->movie_writer_task = 0;
+    }
+    catch(...)
+    {
+    }
+  }
   if (this->grabber_task)
   {
     try
@@ -231,14 +247,17 @@ void ImgGrabber::init_device()
   isl::ErrorHandler::init();
   this->last_image = 0;
   this->grabber_task = 0;
+  this->movie_writer_task = 0;
 
   //- Allocate the dynamic attribute helper
   try
   {
     this->grabber_task = new GrabAPI::GrabberTask(this->image_available_observer_sig);
+    this->movie_writer_task = new GrabAPI::MovieWriterTask();
   }
   catch(...)
   {
+    INFO_STREAM << "ImgGrabber::ImgGrabber() Initialization error [allocation failed] " << endl;
     this->set_status ("Initialization error [allocation failed]");
     this->set_state (Tango::FAULT);
     this->delete_device();
@@ -320,7 +339,7 @@ void ImgGrabber::init_device()
   catch(yat::Exception& ex)
   {
     yat::OSStream os;
-    os << "Initialization error ["
+    os << "Initialization error [loading plugin: "
        << ex.errors[0].desc
        << "]"
        << std::ends;
@@ -376,31 +395,31 @@ void ImgGrabber::init_device()
 
     yat::PlugInAttrInfo bit_depth_attr;
     bit_depth_attr.name = "BitDepth";
-    bit_depth_attr.data_type = yat::PlugInDataType::INT32;
+    bit_depth_attr.data_type = yat::PlugInDataType::INT16;
     bit_depth_attr.write_type = yat::PlugInAttrWriteType::READ;
     bit_depth_attr.label = "Bit Depth";
     bit_depth_attr.desc = "Bit Depth";
-    bit_depth_attr.unit = " ";
+    bit_depth_attr.unit = "bits/pixel";
     bit_depth_attr.display_format = "%2d";
     bit_depth_attr.get_cb = yat::GetAttrCB::instanciate( *grabber, &GrabAPI::IGrabber::get_bit_depth );
 
     yat::PlugInAttrInfo sensor_width_attr;
     sensor_width_attr.name = "SensorWidth";
-    sensor_width_attr.data_type = yat::PlugInDataType::INT32;
+    sensor_width_attr.data_type = yat::PlugInDataType::INT16;
     sensor_width_attr.write_type = yat::PlugInAttrWriteType::READ;
     sensor_width_attr.label = "Sensor Width";
     sensor_width_attr.desc = "Sensor Width";
-    sensor_width_attr.unit = " ";
+    sensor_width_attr.unit = "pixels";
     sensor_width_attr.display_format = "%4d";
     sensor_width_attr.get_cb = yat::GetAttrCB::instanciate( *grabber, &GrabAPI::IGrabber::get_sensor_width );
 
     yat::PlugInAttrInfo sensor_height_attr;
     sensor_height_attr.name = "SensorHeight";
-    sensor_height_attr.data_type = yat::PlugInDataType::INT32;
+    sensor_height_attr.data_type = yat::PlugInDataType::INT16;
     sensor_height_attr.write_type = yat::PlugInAttrWriteType::READ;
     sensor_height_attr.label = "Sensor Height";
     sensor_height_attr.desc = "Sensor Height";
-    sensor_height_attr.unit = " ";
+    sensor_height_attr.unit = "pixels";
     sensor_height_attr.display_format = "%2d";
     sensor_height_attr.get_cb = yat::GetAttrCB::instanciate( *grabber, &GrabAPI::IGrabber::get_sensor_height );
 
@@ -438,7 +457,7 @@ void ImgGrabber::init_device()
   catch(Tango::DevFailed& ex)
   {
     yat::OSStream os;
-    os << "Initialization error ["
+    os << "Initialization error [Create the common attributes: "
        << ex.errors[0].desc
        << "]"
        << std::ends;
@@ -521,16 +540,24 @@ void ImgGrabber::init_device()
 
   try
   {
+    yat::Message* init_writer_msg = yat::Message::allocate(yat::TASK_INIT, INIT_MSG_PRIORITY, true);
+    this->movie_writer_task->go(init_writer_msg);
+    this->movie_frame_write_slot =
+        SlotType::instanciate(*this->movie_writer_task,
+                              &GrabAPI::MovieWriterTask::write);
+    this->add_image_available_observer(this->movie_frame_write_slot);
+
     yat::Message* init_msg = yat::Message::allocate(yat::TASK_INIT, INIT_MSG_PRIORITY, true);
     GrabAPI::GrabberTaskInit task_init_cfg;
     task_init_cfg.grabber = grabber;
     task_init_cfg.auto_start = this->autoStart;
+    task_init_cfg.auto_open = this->autoOpen;
     task_init_cfg.device = this;
 
     init_msg->attach_data(task_init_cfg);
     this->grabber_task->go(init_msg);
 
-    if (task_init_cfg.auto_start)
+    if (task_init_cfg.auto_open & task_init_cfg.auto_start)
       this->save_settings();
 
   }
@@ -584,7 +611,8 @@ void ImgGrabber::get_device_property()
   this->pluginLocation = "undefined";
   this->moviePath = "undefined";
   this->movieFormat = "AVI";
-  this->autoStart = true;
+  this->autoStart = false;
+  this->autoOpen = true;
 
 	//	Read device properties from database.(Automatic code generation)
 	//------------------------------------------------------------------
@@ -593,6 +621,7 @@ void ImgGrabber::get_device_property()
 	dev_prop.push_back(Tango::DbDatum("MoviePath"));
 	dev_prop.push_back(Tango::DbDatum("MovieFormat"));
 	dev_prop.push_back(Tango::DbDatum("AutoStart"));
+	dev_prop.push_back(Tango::DbDatum("AutoOpen"));
 
 	//	Call database and extract values
 	//--------------------------------------------
@@ -639,6 +668,14 @@ void ImgGrabber::get_device_property()
 	//	And try to extract AutoStart value from database
 	if (dev_prop[i].is_empty()==false)	dev_prop[i]  >>  autoStart;
 
+	//  Try to initialize AutoOpen from class property
+	cl_prop = ds_class->get_class_property(dev_prop[++i].name);
+	if (cl_prop.is_empty()==false)  cl_prop  >>  autoOpen;
+	//  Try to initialize AutoOpen from default device value
+	def_prop = ds_class->get_default_device_property(dev_prop[i].name);
+	if (def_prop.is_empty()==false) def_prop  >>  autoOpen;
+	//  And try to extract AutoOpen value from database
+	if (dev_prop[i].is_empty()==false)  dev_prop[i]  >>  autoOpen;
 
 
 	//	End of Automatic code generation
@@ -667,11 +704,14 @@ void ImgGrabber::always_executed_hook()
     case GrabAPI::OPEN:    devstate = Tango::OPEN;    break;
     case GrabAPI::CLOSE:   devstate = Tango::CLOSE;   break;
     case GrabAPI::RUNNING: devstate = Tango::RUNNING; break;
+    case GrabAPI::STANDBY: devstate = Tango::STANDBY; break;
     case GrabAPI::FAULT:   devstate = Tango::FAULT;   break;
+    case GrabAPI::ALARM:   devstate = Tango::ALARM;   break;
     case GrabAPI::UNKNOWN:
     default:               devstate = Tango::UNKNOWN; break;
     }
-	INFO_STREAM<<"|---> state = "<<GetDeviceState(devstate)<<endl;	
+    //INFO_STREAM<<"|---> state = "<<GetDeviceState(devstate)<<endl;
+    //FIXME: method GetDeviceState() not found
     this->set_state(devstate);
     this->set_status(status);
   }
@@ -728,7 +768,7 @@ void ImgGrabber::read_CurrentlySavingMovie(Tango::Attribute &attr)
     return;
   }
 
-  this->is_saving_movie = this->grabber_task->is_saving_movie();
+  this->is_saving_movie = this->movie_writer_task->is_saving_movie();
   attr.set_value(&this->is_saving_movie);
 }
 
@@ -746,7 +786,7 @@ void ImgGrabber::read_MovieRemainingTime(Tango::Attribute &attr)
     return;
   }
 
-  this->movie_remaining_time = this->grabber_task->movie_remaining_time();
+  this->movie_remaining_time = this->movie_writer_task->movie_remaining_time();
   this->movie_remaining_time_cc = const_cast<char*>(this->movie_remaining_time.c_str());
   attr.set_value( &this->movie_remaining_time_cc );
 }
@@ -948,7 +988,7 @@ void ImgGrabber::stop_save_movie()
 
   yat::Message* msg = yat::Message::allocate( kMSG_STOP_RECORDING, DEFAULT_MSG_PRIORITY, false );
 
-  this->grabber_task->post(msg, 3000);
+  this->movie_writer_task->post(msg, 3000);
 }
 
 //+------------------------------------------------------------------
@@ -1143,6 +1183,44 @@ void ImgGrabber::reset_roi()
   }
 }
 
+
+//+------------------------------------------------------------------
+/**
+ *  method: ImgGrabber::reset_camera
+ *
+ *  description:    method to execute "ResetCamera"
+ *
+ *
+ */
+//+------------------------------------------------------------------
+void ImgGrabber::reset_camera()
+{
+  DEBUG_STREAM << "ImgGrabber::reset_camera(): entering... !" << endl;
+
+  // Add your own code to control device here
+  if (this->grabber_task == 0)
+  {
+    return;
+  }
+
+  try
+  {
+    yat::Message* msg = yat::Message::allocate( kMSG_RESET_CAMERA, DEFAULT_MSG_PRIORITY, false );
+    this->grabber_task->post(msg, 3000);
+  }
+  catch(yat::Exception& ex)
+  {
+    yat4tango::YATDevFailed df(ex);
+    throw df;
+  }
+  catch(...)
+  {
+    THROW_DEVFAILED("UNKNOWN_ERROR",
+                    "Unknown error while opening hardware access",
+                    "ImgGrabber::reset_camera");
+  }
+}
+
 //+------------------------------------------------------------------
 /**
  *	method:	ImgGrabber::get_plugin_info
@@ -1205,11 +1283,15 @@ void ImgGrabber::start_save_movie(const Tango::DevVarDoubleStringArray *argin)
   rmconf.format = this->movieFormat;
   rmconf.duration_s = d;
   
-  msg->attach_data(rmconf);
+  //msg->attach_data(rmconf);
 
   try
   {
-    this->grabber_task->wait_msg_handled(msg, 3000);
+    //this->movie_writer_task->wait_msg_handled(msg, 3000);
+    //FIXME: this is a modification to put the git depth somewhere before
+    //       to send the message.
+    int32_t bit_depth = static_cast<int32_t>(this->grabber_task->get_bit_depth());
+    this->movie_writer_task->start_recording(rmconf, bit_depth);
   }
   catch(yat::Exception& ex)
   {
@@ -1240,7 +1322,7 @@ void ImgGrabber::save_settings()
 	DEBUG_STREAM << "ImgGrabber::save_settings(): entering... !" << endl;
 
 	//	Add your own code to control device here
-  if (this->grabber_task == 0)
+  if ((this->grabber_task == 0) || (this->movie_writer_task == 0))
   {
     return;
   }
@@ -1328,14 +1410,15 @@ void ImgGrabber::register_plugin_properties( GrabAPI::IGrabber* object )
     //- extract the value from the Tango::DbData and copy them to a yat::PlugInPropValues
     yat::PlugInPropValues prop_values;
     Tango::DbData::iterator property_query_it;
-    try
+
+    for ( property_query_it = property_query.begin();
+          property_query_it != property_query.end();
+          ++property_query_it )
     {
-      for ( property_query_it = property_query.begin();
-            property_query_it != property_query.end();
-            ++property_query_it )
+      try
       {
         std::string prop_name = (*property_query_it).name;
-
+        std::cout << "Get ImgGrabber property " << prop_name << std::endl;
 #       define YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( TYPEID, TYPE )                      \
         case TYPEID:                                                                \
           {                                                                         \
@@ -1356,6 +1439,8 @@ void ImgGrabber::register_plugin_properties( GrabAPI::IGrabber* object )
           YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::UINT16, yat_uint16_t );
           YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::INT32, yat_int32_t );
           YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::UINT32, yat_uint32_t );
+          YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::INT64, yat_int64_t );
+          YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::UINT64, yat_uint64_t );
           YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::FLOAT, float );
           YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::DOUBLE, double );
           YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::STRING, std::string );
@@ -1364,32 +1449,37 @@ void ImgGrabber::register_plugin_properties( GrabAPI::IGrabber* object )
           YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::UINT16_VECTOR, std::vector<yat_uint16_t> );
           YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::INT32_VECTOR, std::vector<yat_int32_t> );
           YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::UINT32_VECTOR, std::vector<yat_uint32_t> );
+          YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::INT64_VECTOR, std::vector<yat_int64_t> );
+          YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::UINT64_VECTOR, std::vector<yat_uint64_t> );
           YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::FLOAT_VECTOR, std::vector<float> );
           YAT4TANGO_PUSH_PLUGIN_PROP_TYPE( yat::PlugInPropType::DOUBLE_VECTOR, std::vector<double> );
           default: THROW_YAT_ERROR("SOFTWARE_FAILURE","Unsupported property type","PlugInHelper::register_plugin");
         }
       }
-    }
-    catch(yat::Exception& ex)
-    {
-      RETHROW_YAT_ERROR(ex,
-                        "SOFTWARE_FAILURE",
+      catch(yat::Exception& ex)
+      {
+        std::cout << "yat exception when getting property " << (*property_query_it).name << std::endl;
+        RETHROW_YAT_ERROR(ex,
+                          "SOFTWARE_FAILURE",
+                          "Error while getting properties from database",
+                          "PlugInHelper::register_properties");
+      }
+      catch(Tango::DevFailed& df)
+      {
+        yat4tango::TangoYATException ex(df);
+        std::cout << "tango exception when getting property " << (*property_query_it).name << std::endl;
+        RETHROW_YAT_ERROR(ex,
+                          "SOFTWARE_FAILURE",
+                          "Error while getting properties from database",
+                          "PlugInHelper::register_properties");
+      }
+      catch(...)
+      {
+        std::cout << "unknown exception when getting property " << (*property_query_it).name << std::endl;
+        THROW_YAT_ERROR("UNKNOWN_ERROR",
                         "Error while getting properties from database",
                         "PlugInHelper::register_properties");
-    }
-    catch(Tango::DevFailed& df)
-    {
-      yat4tango::TangoYATException ex(df);
-      RETHROW_YAT_ERROR(ex,
-                        "SOFTWARE_FAILURE",
-                        "Error while getting properties from database",
-                        "PlugInHelper::register_properties");
-    }
-    catch(...)
-    {
-      THROW_YAT_ERROR("UNKNOWN_ERROR",
-                      "Error while getting properties from database",
-                      "PlugInHelper::register_properties");
+      }
     }
 
     //- send the list filled with the values to the plugin
@@ -1433,7 +1523,7 @@ void ImgGrabber::notify_image_change(const GrabAPI::SharedImage* simage)
     this->grabber_task->get_image_counter(container);
     yat_uint32_t value = yat::any_cast<yat_uint32_t>(container);
     
-    this->push_change_event("ImageCounter", &value);
+    this->push_change_event("ImageCounter", yat::any_cast<Tango::DevULong*>(&value));
   }
 
 }	//	namespace

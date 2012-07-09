@@ -50,7 +50,7 @@ OUTPUT_TYPE = SHARED_LIB
 #	- $HOME/DeviceServers if OUTPUT_TYPE is DEVICE
 #	- ../bin for others
 #
-OUTPUT_DIR = .
+OUTPUT_DIR ?= .
 
 #=============================================================================
 # PACKAGE_NAME is the name of the library/device/exe you want to build
@@ -70,13 +70,13 @@ PACKAGE_NAME = GrabPlugin_StillImg
 # -I$(SOLEIL_ROOT)/sw-support/hkl/include for HKL library
 # ...etc
 #
-INC_DIR_USER=-I ../../interface \
+INC_DIR_USER=-I ../../../ImgGrabberSL/include \
              -I $(IBA_ROOT)/src \
-             -I $(ISL_ROOT)/include \
+             -I $(ISL_ROOT)/isl_include \
              -I $(OPENCV_ROOT)/include \
              -I $(OPENCV_ROOT)/include/opencv \
-             -I $(YAT_ROOT)/include \
-             -I $(YAT4TANGO_ROOT)/include \
+             -I $(YAT_ROOT)/yat_include \
+             -I $(YAT4TANGO_ROOT)/yat4tango_include \
              -I $(PYLON_ROOT)/include
 
 #=============================================================================

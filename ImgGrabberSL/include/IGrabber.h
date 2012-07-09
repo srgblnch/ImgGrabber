@@ -58,7 +58,9 @@ namespace GrabAPI
     OPEN,    //- hardware session is opened, but acquisition is not started
     CLOSE,   //- hardware session is released
     RUNNING, //- hardware session is opened, and acquisition is started
+    STANDBY, //- hardware session is opened, but not waiting for a trigger
     FAULT,   //- a fatal error occured
+    ALARM,   //- a error occured, but not fatal
     UNKNOWN  //- unknown state
   } GrabberState;
 
@@ -97,6 +99,8 @@ namespace GrabAPI
     //! Returns true if the acquisition is started (RUNNING state only)
     virtual bool is_running( void ) const = 0;
 
+    //! Returns true if hw access is available
+    virtual bool is_camera_present( void ) const = 0;
 
     /*******************************************************************************
      * COMMANDS
@@ -129,9 +133,13 @@ namespace GrabAPI
     //! Get the current ROI
     virtual ROI  get_roi( void )
       throw (yat::Exception) = 0;
-    
+
     //! Configure the ROI to the full image
     virtual void reset_roi( void )
+      throw (yat::Exception) = 0;
+
+    //! Reset the camera
+    virtual void reset_camera( void )
       throw (yat::Exception) = 0;
 
     virtual void get_settings( yat::PlugInPropValues& prop_values ) const

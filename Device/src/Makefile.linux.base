@@ -33,7 +33,7 @@ endif
 # # - DEBUG     : debug symbols - no optimization
 # # - OPTIMIZED : no debug symbols - optimization level set to O2
 # #-----------------------------------------------------------------------------
-RELEASE_TYPE = OPTIMIZED
+RELEASE_TYPE ?= OPTIMIZED
 
 #=============================================================================
 # OUTPUT_TYPE can be one of the following :
@@ -53,7 +53,7 @@ OUTPUT_TYPE = DEVICE
 #	- $HOME/DeviceServers if OUTPUT_TYPE is DEVICE
 #	- ../bin for others
 #
-#OUTPUT_DIR = ../bin
+#OUTPUT_DIR ?= ../bin
 
 #=============================================================================
 # PACKAGE_NAME is the name of the library/device/exe you want to build
@@ -73,12 +73,14 @@ PACKAGE_NAME = ImgGrabber
 # -I$(SOLEIL_ROOT)/sw-support/hkl/include for HKL library
 # ...etc
 #
-INC_DIR_USER=-I ./interface \
+INC_DIR_USER=-I ../../ImgGrabberSL/include \
              -I $(IBA_ROOT)/src \
              -I $(ISL_ROOT)/include \
              -I $(OPENCV_ROOT)/include/opencv \
              -I $(YAT_ROOT)/include \
-             -I $(YAT4TANGO_ROOT)/include
+             -I $(YAT4TANGO_ROOT)/include \
+             -I $(TANGO_ROOT)/include \
+             -I $(TANGO_ROOT)/include/tango
 
 #=============================================================================
 # LIB_DIR_USER is the list of user library directories
@@ -89,11 +91,12 @@ INC_DIR_USER=-I ./interface \
 # -L $(SOLEIL_ROOT)/sw-support/hkl/lib for HKL library
 # ...etc
 #
-LIB_DIR_USER=-L $(ISL_ROOT)/lib/shared \
-             -L $(YAT_ROOT)/lib/shared/linux \
-             -L $(YAT4TANGO_ROOT)/lib/shared/linux \
-             -L $(IBA_ROOT)/lib \
-             -L $(OPENCV_ROOT)/lib
+LIB_DIR_USER=-L $(ISL_ROOT)/lib/shared/`getos` \
+             -L $(YAT_ROOT)/lib \
+             -L $(YAT4TANGO_ROOT)/lib \
+             -L $(IBA_ROOT)/lib/`getos` \
+             -L $(OPENCV_ROOT)/lib \
+             -L $(OPENCV_ROOT)/lib64
              
 
 
@@ -116,9 +119,13 @@ LIB_DIR_USER=-L $(ISL_ROOT)/lib/shared \
 LFLAGS_USR+= -lImgBeamAnalyzer -lISL -lcxcore -lcv -lhighgui
 
 ifeq ($(RELEASE_TYPE), OPTIMIZED)
-	LFLAGS_USR += -lYAT -lYAT4Tango
+	LFLAGS_USR += -lyat -lyat4tango
 else
-	LFLAGS_USR += -lYATd -lYAT4Tangod
+	LFLAGS_USR += -lyatd -lyat4tangod
+endif
+
+ifeq ($(shell getos | grep _64$ | wc -w),1)
+	CXXFLAGS_USER += -D__64BITS_PLATFORM__
 endif
 
 #=============================================================================
@@ -159,13 +166,14 @@ SVC_OBJS =      $(OBJDIR)/ClassFactory.o  \
                 $(OBJDIR)/GrabberAttr.o \
                 $(OBJDIR)/GrabberTask.o \
                 $(OBJDIR)/GrabberPluginManager.o \
-                $(OBJDIR)/IBASourceBypass.o
+                $(OBJDIR)/IBASourceBypass.o \
+                $(OBJDIR)/MovieWriterTask.o
 
 
 #
 # Verbose mode
 #
-.SILENT:
+#.SILENT:
 
 #
 #	include common targets

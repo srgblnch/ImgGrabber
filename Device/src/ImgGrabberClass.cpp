@@ -1,4 +1,4 @@
-static const char *RcsId     = "$Header: /users/chaize/newsvn/cvsroot/Instrumentation/CCD/ImgGrabber/Device/src/ImgGrabberClass.cpp,v 1.4 2010-09-15 16:57:03 vince_soleil Exp $";
+static const char *RcsId     = "$Header: /users/chaize/newsvn/cvsroot/Instrumentation/CCD/ImgGrabber/Device/src/ImgGrabberClass.cpp,v 1.5 2012-07-09 13:58:31 sergiblanch Exp $";
 static const char *TagName   = "$Name: not supported by cvs2svn $";
 static const char *HttpServer= "http://www.esrf.fr/computing/cs/tango/tango_doc/ds_doc/";
 //+=============================================================================
@@ -12,11 +12,14 @@ static const char *HttpServer= "http://www.esrf.fr/computing/cs/tango/tango_doc/
 //
 // project :     TANGO Device Server
 //
-// $Author: vince_soleil $
+// $Author: sergiblanch $
 //
-// $Revision: 1.4 $
+// $Revision: 1.5 $
 //
 // $Log: not supported by cvs2svn $
+// Revision 1.4  2010/09/15 16:57:03  vince_soleil
+// merged from maven migration branch (last commit)
+//
 // Revision 1.1.2.3  2010/04/20 11:28:43  vince_soleil
 // replaced by version from HEAD
 //
@@ -347,6 +350,29 @@ CORBA::Any *ResetROICmd::execute(Tango::DeviceImpl *device,const CORBA::Any &in_
 }
 
 
+//+----------------------------------------------------------------------------
+//
+// method :         ResetCameraClass::execute()
+//
+// description :    method to trigger the execution of the command.
+//                PLEASE DO NOT MODIFY this method core without pogo
+//
+// in : - device : The device on which the command must be excuted
+//      - in_any : The command input data
+//
+// returns : The command output data (packed in the Any object)
+//
+//-----------------------------------------------------------------------------
+CORBA::Any *ResetCameraClass::execute(Tango::DeviceImpl *device,const CORBA::Any &in_any)
+{
+
+    cout2 << "ResetCameraClass::execute(): arrived" << endl;
+
+    ((static_cast<ImgGrabber *>(device))->reset_camera());
+    return new CORBA::Any();
+}
+
+
 //
 //----------------------------------------------------------------
 //	Initialize pointer for singleton pattern
@@ -493,6 +519,11 @@ void ImgGrabberClass::command_factory()
 		"",
 		"",
 		Tango::OPERATOR));
+	command_list.push_back(new ResetCameraClass("ResetCamera",
+	        Tango::DEV_VOID, Tango::DEV_VOID,
+	        "",
+	        "",
+	        Tango::OPERATOR));
 
 	//	add polling if any
 	for (unsigned int i=0 ; i<command_list.size(); i++)

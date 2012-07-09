@@ -6,11 +6,14 @@
 //
 // project :	ImgGrabber
 //
-// $Author: vince_soleil $
+// $Author: sergiblanch $
 //
-// $Revision: 1.5 $
+// $Revision: 1.6 $
 //
 // $Log: not supported by cvs2svn $
+// Revision 1.5  2011/05/25 09:05:47  vince_soleil
+// 19247 : Yat migration
+//
 // Revision 1.4  2010/09/15 16:57:03  vince_soleil
 // merged from maven migration branch (last commit)
 //
@@ -88,14 +91,14 @@
 #include <tango.h>
 #include <list>
 #include <yat/utils/Signal.h>
-#include <Tools.h>
+//#include <Tools.h>
 #include "IGrabber.h"
 
 //using namespace Tango;
 
 /**
- * @author	$Author: vince_soleil $
- * @version	$Revision: 1.5 $
+ * @author	$Author: sergiblanch $
+ * @version	$Revision: 1.6 $
  */
 
  //	Add your own constants definitions here.
@@ -106,6 +109,7 @@ namespace GrabAPI
   class IGrabber;
   class GrabberTask;
   class SharedImage;
+  class MovieWriterTask;
 }
 namespace yat
 {
@@ -138,6 +142,7 @@ namespace ImgGrabber_ns
 *  Tango::RUNNING :
 *  Tango::STANDBY :
 *  Tango::FAULT :
+*  Tango::ALARM :
  */
 
 
@@ -181,6 +186,7 @@ public :
  *	automatically start grabbing at init
  */
 	Tango::DevBoolean	autoStart;
+	Tango::DevBoolean   autoOpen;
 //@}
 
 /**@name Constructors
@@ -319,6 +325,10 @@ public :
  */
 	virtual bool is_GetPluginInfo_allowed(const CORBA::Any &any);
 /**
+ *  Execution allowed for Open command.
+ */
+    virtual bool is_ResetCamera_allowed(const CORBA::Any &any);
+/**
  * 
  *	@exception DevFailed
  */
@@ -377,6 +387,11 @@ public :
  */
 	void	save_settings();
 /**
+ *
+ *  @exception DevFailed
+ */
+	void  reset_camera();
+/**
  * Retrieves information about the grabber plugin used
  *	@return	
  *	@exception DevFailed
@@ -400,6 +415,7 @@ protected :
 
   GrabAPI::SharedImage*         last_image;
   GrabAPI::GrabberTask*         grabber_task;
+  GrabAPI::MovieWriterTask*     movie_writer_task;
   
   bool is_saving_movie;
   std::string movie_remaining_time;
@@ -429,6 +445,7 @@ public:
   typedef SignalType::Slot SlotType;
 
   SlotType image_change_notify_slot;
+  SlotType movie_frame_write_slot;
 
   void add_image_available_observer(SlotType ob);
   void del_image_available_observer(SlotType ob);

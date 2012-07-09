@@ -36,6 +36,7 @@ namespace GrabAPI
 #define kMSG_SET_ROI         ( yat::FIRST_USER_MSG + 7  )
 #define kMSG_RESET_ROI       ( yat::FIRST_USER_MSG + 8  )
 #define kMSG_SAVE_SETTING    ( yat::FIRST_USER_MSG + 9  )
+#define kMSG_RESET_CAMERA    ( yat::FIRST_USER_MSG + 10 )
 
 struct RecordMovieConfig
 {
@@ -122,6 +123,7 @@ struct GrabberTaskInit
   Tango::Device_3Impl* device;
   IGrabber* grabber;
   bool      auto_start;
+  bool      auto_open;
 };
 
 
@@ -155,8 +157,11 @@ public:
     throw (yat::Exception);
 
   bool is_saving_movie( void );
+  bool is_camera_present( void );
 
   std::string movie_remaining_time( void );
+
+  int16_t get_bit_depth() const;
 
 protected:
   //- handle_message
@@ -193,7 +198,7 @@ private:
   //! SNAP msg handler
   void on_snap()
     throw (yat::Exception);
-  
+
   //! START_RECORDING msg handler
   void on_start_recording(yat::Message& msg)
     throw (yat::Exception);
@@ -214,6 +219,9 @@ private:
   void on_save_settings()
     throw (yat::Exception);
 
+  //! RESET_CAMERA msg handler
+  void on_reset_camera()
+    throw (yat::Exception);
 
   void release_grabber( void );
 
@@ -228,10 +236,11 @@ private:
 
   GrabAPI::ROI          current_roi;
 
-  isl::IMovieWriter* movie_writer;
-  RecordMovieConfig  movie_config;
-  yat::Timestamp     movie_start;
-  yat::Timestamp     movie_end;
+  //FIXME: Perhaps we should remove this because it's split out to another object
+//  isl::IMovieWriter* movie_writer;
+//  RecordMovieConfig  movie_config;
+//  yat::Timestamp     movie_start;
+//  yat::Timestamp     movie_end;
 
   FrameRateComputer fps_computer;
   SignalType & image_available_observer_sig;

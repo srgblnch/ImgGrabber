@@ -12,6 +12,7 @@
 // ============================================================================
 #include <tango.h>
 #include <yat/plugin/PlugInTypes.h>
+#include <yat/Portability.h>
 #include <yat4tango/CommonHeader.h>
 #include <yat4tango/ExceptionHelper.h>
 
@@ -49,6 +50,7 @@ namespace GrabAPI
 	  virtual void read(Tango::DeviceImpl *dev, Tango::Attribute &att);
 
 	  virtual void write(Tango::DeviceImpl *dev, Tango::WAttribute &att);
+	  virtual void memorize_attribute(std::string devName, std::string attrName, T write_value);
 
     virtual bool is_allowed (Tango::DeviceImpl *dev, Tango::AttReqType ty);
 
@@ -81,6 +83,7 @@ namespace GrabAPI
 	  virtual void read(Tango::DeviceImpl *dev, Tango::Attribute &att);
 
 	  virtual void write(Tango::DeviceImpl *dev, Tango::WAttribute &att);
+	  virtual void memorize_attribute(std::string devName, std::string attrName, char* write_value);
 
     virtual bool is_allowed (Tango::DeviceImpl *dev, Tango::AttReqType ty);
 
@@ -119,6 +122,8 @@ namespace GrabAPI
   MAP_TO_TANGO_TYPE(yat_uint16_t, Tango::DEV_USHORT)
   MAP_TO_TANGO_TYPE(yat_int32_t, Tango::DEV_LONG)
   MAP_TO_TANGO_TYPE(yat_uint32_t, Tango::DEV_ULONG)
+  MAP_TO_TANGO_TYPE(yat_int64_t, Tango::DEV_LONG64)
+  MAP_TO_TANGO_TYPE(yat_uint64_t, Tango::DEV_ULONG64)
   MAP_TO_TANGO_TYPE(float, Tango::DEV_FLOAT)
   MAP_TO_TANGO_TYPE(double, Tango::DEV_DOUBLE)
   MAP_TO_TANGO_TYPE(std::string, Tango::DEV_STRING)

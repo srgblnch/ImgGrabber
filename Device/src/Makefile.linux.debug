@@ -1,6 +1,6 @@
 
 RELEASE_TYPE = DEBUG
-LFLAGS_USR+= -lYATd -lYAT4Tangod -lISLd
+LFLAGS_USR+= -lyatd -lyat4tangod -lISLd
 # Important: _DEBUG so that YAT headers are compiled with debug information. If not, some structures will not match and will have problems.
 CXXFLAGS_USR+= -D_DEBUG
 

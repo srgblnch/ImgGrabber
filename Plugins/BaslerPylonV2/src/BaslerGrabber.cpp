@@ -7,7 +7,7 @@
 #include "BaslerGrabber.h"
 
 #include <yat/plugin/PlugInSymbols.h>
-#include <yat/Singleton.h>
+#include <yat/utils/Singleton.h>
 #include <yat/threading/Task.h>
 #include <yat/network/Address.h>
 #include <cmath>
@@ -16,11 +16,18 @@ EXPORT_SINGLECLASS_PLUGIN(GrabAPI::BaslerGrabber, GrabAPI::BaslerGrabberInfo);
 
 #define GRABLOG( p ) std::cout << p  << std::endl
 
+#include <sys/syscall.h>   /* For SYS_xxx definitions */
+#include <sys/resource.h>
 
 namespace GrabAPI
 {
-  // Number of buffers used for grabbing
+  // internal constants
   const yat_uint32_t kNUM_BUFFERS = 5;
+  const yat_uint32_t kNUM_EVENTBUFFERS = 20;
+  const int TLREAD_TIMEOUT = 250;//ms
+  const int TLWRITE_TIMEOUT = 250;//ms
+  const int TLHEARTBEAT_TIMEOUT = 5000;//ms
+  const unsigned int kWAIT_TIMEOUT = 11000;//ms
 
   void throw_genicam_exception( const GenICam::GenericException &e, const char* description, const char* location, const char* filename, int line_number )
     throw (yat::Exception)
@@ -114,9 +121,10 @@ namespace GrabAPI
 
     ~TransportLayer()
     {
+      GRABLOG("TransportLayer::~TransportLayer()");
       if (tl_)
       {
-        GRABLOG( "Pylon::CTlFactory::GetInstance().ReleaseTl" );
+        GRABLOG("TransportLayer::~TransportLayer() Pylon::CTlFactory::GetInstance().ReleaseTl");
         Pylon::CTlFactory::GetInstance().ReleaseTl(tl_);      
       }
     }
@@ -137,6 +145,7 @@ namespace GrabAPI
     Camera(shared_ptr<TransportLayer> tl, const std::string& camera_ip)
     {
       FUNCTION_NAME( "Camera::Camera" );
+      GRABLOG("Camera::Camera()");
 
       // Get all attached cameras and exit if no camera is found
       Pylon::DeviceInfoList_t devices;
@@ -146,7 +155,7 @@ namespace GrabAPI
       
       while ( 0 < retry_count-- )
       { 
-        GRABLOG( "TransportLayer::EnumerateDevices" );
+        GRABLOG( "Camera::Camera() TransportLayer::EnumerateDevices" );
         nb_camera_found = tl->get().EnumerateDevices( devices );
         if ( 0 != nb_camera_found )
           break;
@@ -154,6 +163,7 @@ namespace GrabAPI
           yat::ThreadingUtilities::sleep( 0, 100 * 1000 * 1000 ); // wait 100 msec
       }
 
+      GRABLOG("Camera::Camera() "<<nb_camera_found<<" cameras found");
       if ( 0 == nb_camera_found )
       {
         yat::OSStream oss;
@@ -178,12 +188,17 @@ namespace GrabAPI
       {
         const Camera_t::DeviceInfo_t& gige_device_info = static_cast<const Camera_t::DeviceInfo_t&>(*it);
         Pylon::String_t current_ip = gige_device_info.GetIpAddress();
+        GRABLOG("Camera::Camera() Found a "<<gige_device_info.GetModelName()<<" with ip "<<current_ip);
         if (current_ip == pylon_camera_ip)
+        {
+          GRABLOG("Camera::Camera() This is the camera "<<camera_ip << " ("<<current_ip<<")");
           break;
+        }
       }
 
       if (it == devices.end())
       {
+        GRABLOG("Camera::Camera() Camera "<<camera_ip<<" not found!");
         yat::OSStream oss;
         oss << "Camera "
             << camera_ip
@@ -195,7 +210,7 @@ namespace GrabAPI
       // Create the camera object of the first available camera
       // The camera object is used to set and get all available
       // camera features.
-      GRABLOG( "TransportLayer::CreateDevice" );
+      GRABLOG( "Camera::Camera() TransportLayer::CreateDevice" );
       scoped_ptr<Camera_t> camera( new Camera_t(tl->get().CreateDevice( *it )) );
 
       if( !camera->GetDevice() )
@@ -203,8 +218,21 @@ namespace GrabAPI
         THROW_YAT("BASLER_CAM_NOT_AVAILABLE", "Unable to get the camera from transport_layer.");
       }
 
+      Camera_t::TlParams_t TlParams(camera->GetTLNodeMap());
 
-      GRABLOG( "Camera::Open" );
+      TlParams.ReadTimeout.SetValue(TLREAD_TIMEOUT);
+      GRABLOG("Camera::Camera() Get 'Read' timeout: " <<
+              std::dec << TlParams.ReadTimeout.GetValue() << " ms");
+
+      TlParams.WriteTimeout.SetValue(TLWRITE_TIMEOUT);
+      GRABLOG("Camera::Camera() Get 'Write' timeout: " <<
+              std::dec << TlParams.WriteTimeout.GetValue() << " ms");
+
+      TlParams.HeartbeatTimeout.SetValue(TLHEARTBEAT_TIMEOUT);
+      GRABLOG("Camera::Camera() Get 'Heartbeat' timeout: " <<
+              std::dec << TlParams.HeartbeatTimeout.GetValue() << " ms");
+
+      GRABLOG( "Camera::Camera() Camera::Open" );
       camera->Open();
 
       // camera object created successfully (no exception) : 
@@ -215,7 +243,8 @@ namespace GrabAPI
 
     ~Camera()
     {
-      GRABLOG( "Camera::Close" );
+      GRABLOG( "Camera::~Camera()" );
+      camera_->GetDevice()->DeregisterRemovalCallback(cameraRemovalHandle_);
       camera_->Close();
 
       // release camera_, THEN tl_ 
@@ -228,9 +257,20 @@ namespace GrabAPI
       return *camera_;
     }
 
+    Pylon::DeviceCallbackHandle getRemovalHandle()
+    {
+      return cameraRemovalHandle_;
+    }
+
+    void setRemovalHandle(Pylon::DeviceCallbackHandle h)
+    {
+      cameraRemovalHandle_ = h;
+    }
+
   private:
     scoped_ptr<Camera_t> camera_;
     shared_ptr<TransportLayer> tl_; // TL must be deleted AFTER the camera object
+    Pylon::DeviceCallbackHandle cameraRemovalHandle_;
   };
 
   class StreamGrabber
@@ -238,12 +278,12 @@ namespace GrabAPI
   public:
     StreamGrabber( shared_ptr<Camera> camera )
     {
+      GRABLOG("StreamGrabber::StreamGrabber()");
       // Get the first stream grabber object of the selected camera
       scoped_ptr<Camera_t::StreamGrabber_t> stream_grabber;
-      GRABLOG( "new Camera_t::StreamGrabber_t( camera.GetStreamGrabber(0) )" );
+      GRABLOG("StreamGrabber::StreamGrabber() new Camera_t::StreamGrabber_t( camera.GetStreamGrabber(0) )");
       stream_grabber.reset( new Camera_t::StreamGrabber_t(camera->get().GetStreamGrabber( 0 )) );
 
-      GRABLOG( "StreamGrabber::Open" );
       stream_grabber->Open();
 
       // stream grabber opened successfully : keep the reference active to properly close it
@@ -254,7 +294,7 @@ namespace GrabAPI
 
     ~StreamGrabber()
     {
-      GRABLOG( "StreamGrabber::Close" );
+      GRABLOG( "StreamGrabber::~StreamGrabber()" );
       stream_grabber_->Close();
 
       // release stream_grabber_, THEN camera_ 
@@ -278,14 +318,14 @@ namespace GrabAPI
   public:
     ChunkParser( shared_ptr<Camera> camera )
     {
-      GRABLOG( "Camera::CreateChunkParser" );
+      GRABLOG("ChunkParser::ChunkParser() Camera::CreateChunkParser");
       chunk_parser_ = camera->get().CreateChunkParser();
       camera_ = camera;
    }
 
     ~ChunkParser()
     {
-      GRABLOG( "Camera::DestroyChunkParser" );
+      GRABLOG("ChunkParser::~ChunkParser() Camera::DestroyChunkParser");
       camera_->get().DestroyChunkParser( chunk_parser_ );
       camera_.reset();
     }
@@ -308,11 +348,11 @@ namespace GrabAPI
                       size_t image_size )
       : stream_grabber_(stream_grabber)
     {
-      GRABLOG( "new Buffer"  );
+      GRABLOG("RegisteredBuffer::RegisteredBuffer()");
       data_.reset( new yat_uint8_t[image_size] );
-      GRABLOG( "StreamGrabber::RegisterBuffer "  << std::hex << reinterpret_cast<uintptr_t>(data_.get()) );
+      GRABLOG("RegisteredBuffer::RegisteredBuffer() StreamGrabber::RegisterBuffer "  << std::hex << reinterpret_cast<uintptr_t>(data_.get()));
       handle_ = stream_grabber_->get().RegisterBuffer( data_.get(), image_size );
-      GRABLOG( "Successfully registered buffer. handle = "  << std::hex << handle_ );
+      GRABLOG("RegisteredBuffer::RegisteredBuffer() Successfully registered buffer. handle = "  << std::hex << handle_);
     }
     
     ~RegisteredBuffer()
@@ -321,7 +361,7 @@ namespace GrabAPI
       stream_grabber_->get().DeregisterBuffer( handle_ );
       
       // data must be released after deregistering buffer
-      GRABLOG( "delete " << std::hex << reinterpret_cast<uintptr_t>(data_.get())  );
+      GRABLOG("RegisteredBuffer::~RegisteredBuffer() delete " << std::hex << reinterpret_cast<uintptr_t>(data_.get()));
       data_.reset();
 
       // stream grabber must be released after everything
@@ -352,6 +392,7 @@ namespace GrabAPI
                           shared_ptr<StreamGrabberRessourceLock> ressourcelock,
                           long acquisition_buffer_nb )
     {
+      GRABLOG("RegisteredBufferList::RegisteredBufferList()");
       const size_t payload = static_cast<size_t>( camera->get().PayloadSize.GetValue() );
       buf_list_.reserve( acquisition_buffer_nb );
       for (long i = 0; i < acquisition_buffer_nb; ++i)
@@ -386,11 +427,12 @@ namespace GrabAPI
       : reg_buffer_list_(reg_buffer_list),
         stream_grabber_( stream_grabber )
     {
+      GRABLOG("QueuedBufferList::QueuedBufferList()");
       // queue them
       for (size_t i = 0; i < reg_buffer_list->buf_list_.size() ; ++i)
       {
         RegisteredBuffer& reg_buffer = *(reg_buffer_list->buf_list_[i]);
-        GRABLOG( "StreamGrabber::QueueBuffer with handle " << std::hex << reg_buffer.handle()  );
+        GRABLOG("QueuedBufferList::QueuedBufferList() StreamGrabber::QueueBuffer with handle " << std::hex << reg_buffer.handle());
         stream_grabber_->get().QueueBuffer( reg_buffer.handle() );
       }
     }
@@ -398,11 +440,11 @@ namespace GrabAPI
     ~QueuedBufferList()
     {
       //- put all pending buffers to the stream_grabber's output queue
-      GRABLOG( "StreamGrabber::CancelGrab"  );
+      GRABLOG("QueuedBufferList::~QueuedBufferList() StreamGrabber::CancelGrab");
       stream_grabber_->get().CancelGrab();
 
       //- retrieve them to flush the output queue
-      GRABLOG( "StreamGrabber::flush queue"  );
+      GRABLOG("QueuedBufferList::~QueuedBufferList() StreamGrabber::flush queue");
       Pylon::GrabResult r;
       while( stream_grabber_->get().RetrieveResult( r ) )
       {
@@ -413,7 +455,7 @@ namespace GrabAPI
       }
 
       // unregister all buffers
-      GRABLOG( "delete RegisteredBufferList"  );
+      GRABLOG("QueuedBufferList::~QueuedBufferList() delete RegisteredBufferList");
       reg_buffer_list_.reset();
     }
 
@@ -430,13 +472,13 @@ namespace GrabAPI
     StreamGrabberRessourceLock( shared_ptr<StreamGrabber> stream_grabber )
       : stream_grabber_( stream_grabber )
     {
-      GRABLOG( "StreamGrabber::PrepareGrab"  );
+      GRABLOG("StreamGrabberRessourceLock::StreamGrabberRessourceLock() PrepareGrab");
       stream_grabber_->get().PrepareGrab();
     }
 
     ~StreamGrabberRessourceLock()
     {
-      GRABLOG( "StreamGrabber::FinishGrab"  );
+      GRABLOG("StreamGrabberRessourceLock::StreamGrabberRessourceLock() FinishGrab");
       stream_grabber_->get().FinishGrab();
     }
 
@@ -452,30 +494,63 @@ namespace GrabAPI
         nb_image_(nb_image),
         size_x_(0),
         size_y_(0),
-        first_image_received_( false )
+        first_image_received_( false ),
+        eventGrabber_(grabber_object.camera->get().GetEventGrabber())
     {
 #ifndef YAT_WIN32
       termination_event_ = Pylon::WaitObjectEx::Create();
 #endif
+      try
+      {
+
+        //event config
+        eventGrabber_.NumBuffer.SetValue(kNUM_EVENTBUFFERS);// must be set before open is called!!
+        // Enable resending of event messages when lost messages are detected:
+        // Loss of messages is detected by sending acknowledges for every event message.
+        // When the camera doesn't receive the acknowledge, it will resend the message up to
+        // 'RetryCount' times.
+        eventGrabber_.RetryCount = 3;
+        eventGrabber_.Open();
+        pEventAdapter = grabber_.camera->get().CreateEventAdapter();
+        if (! pEventAdapter)
+          GRABLOG("AcqTask::AcqTask() Failed to create an event adapter");
+        else
+          GRABLOG("AcqTask::AcqTask() event adapter well created");
+      }
+      catch( GenICam::GenericException & e )
+      {
+        GRABLOG("AcqTask::AcqTask() GenICamException creating the event adapter: "<<e.what());
+      }
+      catch(...)
+      {
+        GRABLOG("AcqTask::AcqTask() Exception creating the event adapter");
+      }
       wait_objects_.Add( grabber_.stream_grabber->get().GetWaitObject() );  // getting informed about buffers
       wait_objects_.Add( termination_event_ ); // getting informed about termination request
+      wait_objects_.Add( eventGrabber_.GetWaitObject() );
 
       this->go();
     }
 
     ~AcqTask()
     {
+      GRABLOG("AcqTask::~AcqTask()");
+      eventGrabber_.Close();
+      grabber_.camera->get().DestroyEventAdapter(pEventAdapter);
+      GRABLOG("AcqTask::~AcqTask() completely destroyed");
     }
 
     void start()
     {
+      GRABLOG("AcqTask::Start()");
+      setpriority(PRIO_PROCESS, syscall(SYS_gettid), -20);
       this->wait_msg_handled( yat::Message::allocate(MSG_ID_START, DEFAULT_MSG_PRIORITY, true ) );
     }
 
     void stop()
     {
       // signal the termination event to cancel the blocking call where we wait on a new image
-      GRABLOG( "termination_event_.Signal()" );
+      GRABLOG("AcqTask::Stop() termination_event_.Signal()");
       termination_event_.Signal();
 
       this->wait_msg_handled( yat::Message::allocate(MSG_ID_STOP, DEFAULT_MSG_PRIORITY, true ) );
@@ -501,15 +576,21 @@ namespace GrabAPI
 
             grabber_.camera->get().AcquisitionStart.Execute();
 
-            this->post( yat::Message::allocate(MSG_ID_GET_IMAGE) ); 
+            this->post( yat::Message::allocate(MSG_ID_GET_IMAGE) );
 
-            grabber_.state = RUNNING;
+            if ( grabber_.camera->get().TriggerMode.GetValue() == TriggerMode_On)
+              grabber_.state = STANDBY;
+            else
+              grabber_.state = RUNNING;
           }
           catch( GenICam::GenericException & e )
           {
             // transfer the exception to the caller (this message is 'waited')
             THROW_GENICAM( e, "Error when starting acquisition" );
-
+          }
+          catch(...)
+          {
+            throw;
           }
         }
         break;
@@ -524,71 +605,77 @@ namespace GrabAPI
             const unsigned int kWAIT_TIMEOUT = 11000;
             if ( !wait_objects_.WaitForAny( kWAIT_TIMEOUT, &index ) )
             {
-              // timeout error
-              GRABLOG( "Timeout occurred" );
-              grabber_.camera->get().AcquisitionStop.Execute();
-              grabber_.state = FAULT;
+              GRABLOG("wake up due to a wait time out (" <<
+                      std::dec << kWAIT_TIMEOUT << "ms)");
+              if (grabber_.state == FAULT)
+                GRABLOG("It's on fault!");
+              else if (grabber_.state == CLOSE)
+                this->post( yat::Message::allocate(MSG_ID_STOP) );
+              else
+                this->post( yat::Message::allocate(MSG_ID_GET_IMAGE) );
               return;
             }
 
             // index == 0 -> the stream grabber signaled the wait object
             // index == 1 means that AcqTask::stop has been called
-            if ( index == 0 && grabber_.stream_grabber->get().RetrieveResult( result ) )
+            if ( index == 0 )
             {
-              switch( result.Status() )
+              grabber_.state = RUNNING;
+              if ( grabber_.stream_grabber->get().RetrieveResult( result ) )
               {
-              case Pylon::Idle:
-                //GRABLOG( "Pylon::Idle result received" );
-                break;
-              case Pylon::Queued:
-                //GRABLOG( "Pylon::Queued result received" );
-                break;
-              case Pylon::Grabbed:
+                switch( result.Status() )
                 {
-                  if ( grabber_.disable_callback == false )
+                  case Pylon::Idle:
+                    GRABLOG( "Pylon::Idle result received" );
+                    break;
+                  case Pylon::Queued:
+                    GRABLOG( "Pylon::Queued result received" );
+                    break;
+                  case Pylon::Grabbed:
                   {
-                    //- make a deep copy and call the callback
-                    /// @todo Delete new_image pointer on error...
-                    current_nb_image_++;
-                    size_t bit_depth = grabber_._raw_get_bit_depth();
-                    Image* new_image = new Image(size_x_,
-                                                 size_y_,
-                                                 static_cast<unsigned short*>(result.Buffer()));
-                    
-                    new_image->bit_depth = bit_depth;
-
-                    if ( !first_image_received_ )
+                    if ( grabber_.disable_callback == false )
                     {
-                      grabber_.chunk_parser->get().AttachBuffer( result.Buffer(), result.GetPayloadSize() );
-                      first_image_received_ = true;
+                      //- make a deep copy and call the callback
+                      /// @todo Delete new_image pointer on error...
+                      current_nb_image_++;
+                      size_t bit_depth = grabber_._raw_get_bit_depth();
+                      Image* new_image = new Image(size_x_,
+                                                   size_y_,
+                                                   static_cast<unsigned short*>(result.Buffer()));
+                      new_image->bit_depth = bit_depth;
+                      if ( !first_image_received_ )
+                      {
+                        grabber_.chunk_parser->get().AttachBuffer( result.Buffer(), result.GetPayloadSize() );
+                        first_image_received_ = true;
+                      }
+                      else
+                      {
+                        grabber_.chunk_parser->get().UpdateBuffer( result.Buffer() );
+                      }
+                      int64_t framecounter = grabber_.camera->get().ChunkFramecounter.GetValue();
+                      if ( framecounter != 0 && grabber_.last_framecounter != framecounter - 1 )
+                        grabber_.overruns++;
+                      grabber_.last_framecounter = static_cast<yat_int32_t>(framecounter);
+                      yat_uint64_t timestamp = static_cast<yat_uint64_t>(grabber_.camera->get().ChunkTimestamp.GetValue());
+                      // each clock tick is 8 ns for a Pilot camera
+                      grabber_.frame_rate = 125000000. / (double(timestamp) - double(grabber_.last_timestamp));
+                      grabber_.last_timestamp = timestamp;
+                      grabber_.image_callback(new_image);
                     }
-                    else
-                    {
-                      grabber_.chunk_parser->get().UpdateBuffer( result.Buffer() );
-                    }
-
-                    int64_t framecounter = grabber_.camera->get().ChunkFramecounter.GetValue();
-                    if ( framecounter != 0 && grabber_.last_framecounter != framecounter - 1 )
-                      grabber_.overruns++;
-
-                    grabber_.last_framecounter = static_cast<yat_int32_t>(framecounter);
-                    int64_t timestamp = grabber_.camera->get().ChunkTimestamp.GetValue();
-                    // each clock tick is 8 ns for a Pilot camera
-                    grabber_.frame_rate = 125000000. / (double(timestamp) - double(grabber_.last_timestamp));
-                    grabber_.last_timestamp = timestamp;
-
-                    grabber_.image_callback(new_image);
+                    break;
                   }
+                  case Pylon::Canceled:
+                    GRABLOG( "Pylon::Canceled result received" );
+                    break;
+                  case Pylon::Failed:
+                    GRABLOG( "Pylon::Failed result received: (" << std::hex << result.GetErrorCode() <<\
+                                                         ") [@" << result.GetTimeStamp() <<\
+                                                           "] " << result.GetErrorDescription());
+                    break;
+                  default:
+                    GRABLOG( "Unknown Pylon result received: (" << result.Status() << ")" );
+                    break;
                 }
-              case Pylon::Canceled:
-                //GRABLOG( "Pylon::Canceled result received" );
-                break;
-              case Pylon::Failed:
-                //GRABLOG( "Pylon::Failed result received" );
-                break;
-              default:
-                //GRABLOG( "Unknown Pylon result received" );
-                break;
               }
 
               // reuse the buffer for grabbing 
@@ -599,36 +686,84 @@ namespace GrabAPI
               else
                 this->post( yat::Message::allocate(MSG_ID_GET_IMAGE) ); 
             }
-
-            
+            // index == 1 means that AcqTask::stop has been called
+            else if ( index == 1 )
+            {
+              GRABLOG("AcqTask::stop has been called");
+            }
+            // index == 2 -> the event grabber signaled the wait object
+            else if ( index == 2 )
+            {
+              GRABLOG("Pylon::EventResult");
+              Pylon::EventResult EvResult;
+              if (eventGrabber_.RetrieveEvent(EvResult))
+              {
+                  if (EvResult.Succeeded())
+                  {
+                      GRABLOG("Successfully got an event message!");
+                      // To figure out the content of the event message, pass it to the event adapter.
+                      // DeliverMessage will fire the registered callback when the buffer contains
+                      // an end-of-exposure event.
+                      if (pEventAdapter)
+                      {
+                        pEventAdapter->DeliverMessage(EvResult.Buffer, sizeof EvResult.Buffer);
+                      }
+                  }
+                  else
+                  {
+                      GRABLOG("Error retrieving event:" << EvResult.ErrorDescription());
+                  }
+              }
+            }
+          }
+          catch( GenICam::AccessException & e )
+          {
+            GRABLOG("Can not access the camera");
+            grabber_.state = FAULT;
+            THROW_GENICAM(e,"Can not access the camera");
           }
           catch( GenICam::GenericException & e )
           {
             try
             {
-              GRABLOG( "Camera.AcquisitionStop.Execute()" );
+              GRABLOG( "camera.AcquisitionStop.Execute()" );
               grabber_.camera->get().AcquisitionStop.Execute();
             }
             catch( ... ) {}
-
+            GRABLOG("GenICam error during acquisition");
             grabber_.state = FAULT;
-
             THROW_GENICAM( e, "Error during acquisition" );
+          }
+          catch( yat::Exception & )
+          {
+            GRABLOG("Yat exception during acquisition");
+            grabber_.state = FAULT;
+            throw;
+          }
+          catch(...)
+          {
+            GRABLOG("Unknown error during acquisition");
+            grabber_.state = FAULT;
+            THROW_YAT("UNKNOWN_ERROR", "Unknown error during acquisition");
           }
         }
         break;
       case MSG_ID_STOP :
         {
-
+          GRABLOG("MSG_ID_STOP");
           try
           {
-            GRABLOG( "Camera.AcquisitionStop.Execute()" );
-            grabber_.camera->get().AcquisitionStop.Execute();
-            grabber_.state = OPEN;
+            if ( grabber_.state == RUNNING || grabber_.state == STANDBY)
+            {
+              GRABLOG( "Camera.AcquisitionStop.Execute()" );
+              grabber_.camera->get().AcquisitionStop.Execute();
+              grabber_.state = OPEN;
+            }
           }
           catch( GenICam::GenericException & e )
           {
             // transfer the exception to the caller (this message is 'waited')
+            GRABLOG("MSG_ID_STOP exception:"<<e.what());
             THROW_GENICAM( e, "Error when stoping acquisition" );
 
           }
@@ -659,6 +794,8 @@ namespace GrabAPI
     size_t current_nb_image_; // the current number of images acquired
     size_t size_x_, size_y_;
     bool first_image_received_;
+    Camera_t::EventGrabber_t eventGrabber_;
+    Pylon::IEventAdapter *pEventAdapter;
   };
 
 
@@ -687,6 +824,7 @@ namespace GrabAPI
       last_framecounter(0),
       acquisition_buffer_nb(kNUM_BUFFERS)
   {
+    this->camera_present = false;
   }
 
   // ============================================================================
@@ -725,8 +863,8 @@ namespace GrabAPI
     attr_info.label  = "BlackLevel";
     attr_info.desc   = "Black Level";
     attr_info.unit   = " ";
-    attr_info.display_format = "%3d";
-    attr_info.data_type = yat::PlugInDataType::INT32;
+    attr_info.display_format = "%2d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
     attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
     attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_black_level );
     attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_black_level );
@@ -735,9 +873,9 @@ namespace GrabAPI
     attr_info.name   = "Gain";
     attr_info.label  = "Gain";
     attr_info.desc   = "Gain";
-    attr_info.unit   = " ";
-    attr_info.display_format = "%4d";
-    attr_info.data_type = yat::PlugInDataType::INT32;
+    attr_info.unit   = "%";
+    attr_info.display_format = "%4.2f";
+    attr_info.data_type = yat::PlugInDataType::DOUBLE;
     attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
     attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_gain );
     attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_gain );
@@ -748,7 +886,7 @@ namespace GrabAPI
     attr_info.desc   = "Trigger Mode (0 : internal, 1 : external - timed, 2 : external - pulse width)";
     attr_info.unit   = " ";
     attr_info.display_format = "%1d";
-    attr_info.data_type = yat::PlugInDataType::INT32;
+    attr_info.data_type = yat::PlugInDataType::INT16;
     attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
     attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_trigger_mode );
     attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_trigger_mode );
@@ -759,7 +897,7 @@ namespace GrabAPI
     attr_info.desc   = "Trigger Line (0 : Line1, 1 : Line2)";
     attr_info.unit   = " ";
     attr_info.display_format = "%1d";
-    attr_info.data_type = yat::PlugInDataType::INT32;
+    attr_info.data_type = yat::PlugInDataType::INT16;
     attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
     attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_trigger_line );
     attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_trigger_line );
@@ -770,7 +908,7 @@ namespace GrabAPI
     attr_info.desc   = "Trigger Activation (0 : rising edge, 1 : falling edge)";
     attr_info.unit   = " ";
     attr_info.display_format = "%1d";
-    attr_info.data_type = yat::PlugInDataType::INT32;
+    attr_info.data_type = yat::PlugInDataType::INT16;
     attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
     attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_trigger_activation );
     attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_trigger_activation );
@@ -791,7 +929,7 @@ namespace GrabAPI
     attr_info.desc   = "number of overruns since beginning of acquisition";
     attr_info.unit   = " ";
     attr_info.display_format = "%6d";
-    attr_info.data_type = yat::PlugInDataType::INT32;
+    attr_info.data_type = yat::PlugInDataType::UINT32;
     attr_info.write_type = yat::PlugInAttrWriteType::READ;
     attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_overruns );
     list.push_back(attr_info);
@@ -801,7 +939,7 @@ namespace GrabAPI
     attr_info.desc   = "";
     attr_info.unit   = " ";
     attr_info.display_format = "%6d";
-    attr_info.data_type = yat::PlugInDataType::INT32;
+    attr_info.data_type = yat::PlugInDataType::UINT32;
     attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
     attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_internal_acquisition_buffers );
     attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_internal_acquisition_buffers );
@@ -819,6 +957,207 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_averaging );
     list.push_back(attr_info);
 */
+
+    attr_info.name   = "EthernetFrameTransmissionDelay";
+    attr_info.label  = "Frame Transmission Delay";
+    attr_info.desc   = "This value sets the frame transfer delay for the selected stream channel. This value sets a delay betweem when the camera would normally begin transmitted an acquired image (frame) and when it actually begins transmitting the acquired image. (1 tick = 8ns)";
+    attr_info.unit   = "ticks";
+    attr_info.display_format = "%6d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
+    attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_frame_transmission_delay );
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_frame_transmission_delay );
+    list.push_back(attr_info);
+
+    attr_info.name   = "EthernetInterPacketDelay";
+    attr_info.label  = "Inter Packet Delay";
+    attr_info.desc   = "This value sets a delay between the transmission of each packet for the selected stream channel. The delay is measured in ticks. (1 tick = 8ns)";
+    attr_info.unit   = "ticks";
+    attr_info.display_format = "%6d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
+    attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_packet_transmission_delay );
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_packet_transmission_delay );
+    list.push_back(attr_info);
+
+    attr_info.name   = "BinningVertical";
+    attr_info.label  = "Vertical Binning";
+    attr_info.desc   = "Binning increases the camera's response to light by summing the charges from adjacent pixels into one pixel.";
+    attr_info.unit   = "pixels";
+    attr_info.display_format = "%2d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
+    attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_binning_vertical );
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_binning_vertical );
+    list.push_back(attr_info);
+
+    attr_info.name   = "BinningHorizontal";
+    attr_info.label  = "Horizontal Binning";
+    attr_info.desc   = "Binning increases the camera's response to light by summing the charges from adjacent pixels into one pixel.";
+    attr_info.unit   = "pixels";
+    attr_info.display_format = "%2d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
+    attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_binning_horizontal );
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_binning_horizontal );
+    list.push_back(attr_info);
+
+    attr_info.name   = "EthernetPayloadPacketSize";
+    attr_info.label  = "Ethernet Payload Packet Size";
+    attr_info.desc   = "Size of the ethernet frames to configure jumbo frames.";
+    attr_info.unit   = "bytes";
+    attr_info.display_format = "%2d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
+    attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_ethernet_payload_packet_size );
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_ethernet_payload_packet_size );
+    list.push_back(attr_info);
+
+    attr_info.name   = "EthernetPayloadImageSize";
+    attr_info.label  = "Ethernet Payload Image Size";
+    attr_info.desc   = "Total number of bytes sent in a payload.";
+    attr_info.unit   = "bytes";
+    attr_info.display_format = "%2d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ;
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_ethernet_payload_image_size );
+    list.push_back(attr_info);
+
+    attr_info.name   = "EthernetEnableResend";
+    attr_info.label  = "Ethernet Enable Resend";
+    attr_info.desc   = "Enables the packet resend mechanism.";
+    attr_info.unit   = "";
+    attr_info.display_format = "%1d";
+    attr_info.data_type = yat::PlugInDataType::BOOLEAN;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
+    attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_ethernet_enable_resend );
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_ethernet_enable_resend );
+    list.push_back(attr_info);
+
+    attr_info.name   = "EthernetPacketTimeout";
+    attr_info.label  = "Ethernet Packet Timeout";
+    attr_info.desc   = "How long the filter driver will wait for the next expected packet, before iniciates a resend request.";
+    attr_info.unit   = "ms";
+    attr_info.display_format = "%4d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
+    attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_ethernet_packet_timeout );
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_ethernet_packet_timeout );
+    list.push_back(attr_info);
+
+    attr_info.name   = "EthernetFrameRetention";
+    attr_info.label  = "Ethernet Frame Retention";
+    attr_info.desc   = "Sets the timeout for the frame retention timer.";
+    attr_info.unit   = "ms";
+    attr_info.display_format = "%4d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
+    attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_ethernet_frame_retention );
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_ethernet_frame_retention );
+    list.push_back(attr_info);
+
+    attr_info.name   = "EthernetReceiveWindowSize";
+    attr_info.label  = "Ethernet Receive Window Size";
+    attr_info.desc   = "Set the size of the receive window.";
+    attr_info.unit   = "packets";
+    attr_info.display_format = "%2d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
+    attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_ethernet_receive_window_size );
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_ethernet_receive_window_size );
+    list.push_back(attr_info);
+
+    attr_info.name   = "EthernetBandwidthUse";
+    attr_info.label  = "Ethernet Bandwidth Use";
+    attr_info.desc   = "Indicates the bandwidth what will be used by the camera to transmit image and chunck feature data and to handle resends and controls data transmissions.";
+    attr_info.unit   = "Bytes/second";
+    attr_info.display_format = "%2d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ;
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_ethernet_bandwidth_use );
+    list.push_back(attr_info);
+
+    attr_info.name   = "Camera_FirmwareVersion";
+    attr_info.label  = "Camera Firmware Version";
+    attr_info.desc   = "The version of the firmware in the camera";
+    attr_info.unit   = "";
+    attr_info.display_format = "%3.1f";
+    attr_info.data_type = yat::PlugInDataType::STRING;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ;
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_firmware_version );
+    list.push_back(attr_info);
+
+    attr_info.name   = "Camera_DeviceVersion";
+    attr_info.label  = "Camera Device Version";
+    attr_info.desc   = "The device version number of the camera";
+    attr_info.unit   = "";
+    attr_info.display_format = "%3.1f";
+    attr_info.data_type = yat::PlugInDataType::STRING;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ;
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_device_version );
+    list.push_back(attr_info);
+
+    attr_info.name   = "Camera_DeviceModel";
+    attr_info.label  = "Camera Device Model";
+    attr_info.desc   = "The model name of the camera";
+    attr_info.unit   = "";
+    attr_info.display_format = "%3.1f";
+    attr_info.data_type = yat::PlugInDataType::STRING;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ;
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_device_model );
+    list.push_back(attr_info);
+
+    attr_info.name   = "Camera_SerialNumber";
+    attr_info.label  = "Camera Serial Number";
+    attr_info.desc   = "The serial number of the camera";
+    attr_info.unit   = "";
+    attr_info.display_format = "%3.1f";
+    attr_info.data_type = yat::PlugInDataType::STRING;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ;
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_serial_number );
+    list.push_back(attr_info);
+
+    attr_info.name   = "AcquisitionFrameCount";
+    attr_info.label  = "Acquisition Frame Count";
+    attr_info.desc   = "Set the number of images to take when a trigger is received.";
+    attr_info.unit   = "images";
+    attr_info.display_format = "%2d";
+    attr_info.data_type = yat::PlugInDataType::UINT16;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ_WRITE;
+    attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_acquisition_frame_count );
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_acquisition_frame_count );
+    list.push_back(attr_info);
+
+    attr_info.name   = "PixelFormat";
+    attr_info.label  = "Pixel Format";
+    attr_info.desc   = "Determine the format of the image data transmitted by the camera.";
+    attr_info.unit   = "Format";
+    attr_info.display_format = "%3.1f";
+    attr_info.data_type = yat::PlugInDataType::STRING;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ;//_WRITE;
+    //attr_info.set_cb = yat::SetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::set_pixel_format );
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_pixel_format );
+    list.push_back(attr_info);
+
+    attr_info.name = "TimeStamp";
+    attr_info.label = "Time Stamp";
+    attr_info.desc = "Time stamp of the last acquired image.";
+    attr_info.unit = " ";
+    attr_info.display_format = "%8d";
+    attr_info.data_type = yat::PlugInDataType::UINT64;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ;
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_last_timestamp );
+    list.push_back(attr_info);
+
+    attr_info.name   = "TemperatureSensorBoard";
+    attr_info.label  = "Sensor Board Temperature";
+    attr_info.desc   = "Show current temperature of the sensor board";
+    attr_info.unit   = "celcius";
+    attr_info.display_format = "%3.1f";
+    attr_info.data_type = yat::PlugInDataType::DOUBLE;
+    attr_info.write_type = yat::PlugInAttrWriteType::READ;
+    attr_info.get_cb = yat::GetAttrCB::instanciate( const_cast<BaslerGrabber&>(*this), &BaslerGrabber::get_sensor_board_temperature );
+    list.push_back(attr_info);
   }
 
   // ============================================================================
@@ -830,11 +1169,15 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     prop_infos["CameraIP"]          = yat::PlugInPropType::STRING;
     prop_infos["ExposureTime"]      = yat::PlugInPropType::DOUBLE;
     prop_infos["FrameRate"]         = yat::PlugInPropType::DOUBLE;
-    prop_infos["Gain"]              = yat::PlugInPropType::INT32;
-    prop_infos["BlackLevel"]        = yat::PlugInPropType::INT32;
-    prop_infos["TriggerMode"]       = yat::PlugInPropType::INT32;
-    prop_infos["TriggerLine"]       = yat::PlugInPropType::INT32;
-    prop_infos["TriggerActivation"] = yat::PlugInPropType::INT32;
+    prop_infos["Gain"]              = yat::PlugInPropType::DOUBLE;
+    prop_infos["BlackLevel"]        = yat::PlugInPropType::UINT16;
+    prop_infos["TriggerMode"]       = yat::PlugInPropType::INT16;
+    prop_infos["TriggerLine"]       = yat::PlugInPropType::INT16;
+    prop_infos["TriggerActivation"] = yat::PlugInPropType::INT16;
+    prop_infos["FrameTransmissionDelay"]    = yat::PlugInPropType::UINT16;
+    prop_infos["BinningVertical"]           = yat::PlugInPropType::UINT8;
+    prop_infos["BinningHorizontal"]         = yat::PlugInPropType::UINT8;
+    prop_infos["EthernetPayloadPacketSize"] = yat::PlugInPropType::UINT16;
     prop_infos["ROI"]               = yat::PlugInPropType::INT32_VECTOR;
   }
 
@@ -850,30 +1193,47 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     {
       THROW_YAT("PROPERTY_ERROR", "Critical property missing or empty [CameraIP]");
     }
-    this->camera_ip = yat::any_cast<std::string>(prop_values["CameraIP"]);
-
-
-#   define REGISTER_PROP( prop_name, type, type_ref )             \
-    {                                                             \
-      yat::Any& prop_value = prop_values[prop_name];              \
-      if (!prop_value.empty())                                    \
-        type_ref = yat::any_cast<type>(prop_value);               \
+    try
+    {
+      this->camera_ip = yat::any_cast<std::string>(prop_values["CameraIP"]);
+    }
+    catch(yat::Exception& ex)
+    {
+      std::cout << "Oh lala: " << ex.errors[0].reason << std::endl << ex.errors[0].desc << std::endl;
+      RETHROW_YAT_ERROR(ex,
+                        "PROPERTY_ERROR",
+                        "Error while setting 'CameraIP' property",
+                        "BaslerGrabber::set_properties");
     }
 
-#   define REGISTER_ENUM( prop_name, type, type_ref )                    \
-    {                                                                    \
-      yat::Any& prop_value = prop_values[prop_name];                     \
-      if (!prop_value.empty())                                           \
-        type_ref = static_cast<type>(yat::any_cast<yat_int32_t>(prop_value));   \
+#   define REGISTER_PROP( prop_name, type, type_ref )                          \
+    {                                                                          \
+      yat::Any& prop_value = prop_values[prop_name];                           \
+      GRABLOG( "Get Pluggin property " << prop_name );                         \
+      if (!prop_value.empty())                                                 \
+        type_ref = yat::any_cast<type>(prop_value);                            \
     }
 
-    REGISTER_PROP("ExposureTime",       double,             init_cfg.exposure_time);
-    REGISTER_PROP("FrameRate",          double,             init_cfg.frame_rate);
-    REGISTER_PROP("Gain",               yat_int32_t,               init_cfg.gain);
-    REGISTER_PROP("BlackLevel",         yat_int32_t,               init_cfg.blacklevel);
-    REGISTER_ENUM("TriggerMode",        Mode,               init_cfg.acq_mode);
-    REGISTER_ENUM("TriggerLine",        TriggerSourceEnums, init_cfg.trigger_line);
-    REGISTER_ENUM("TriggerActivation",  TriggerActivation,  init_cfg.trigger_activation);
+#   define REGISTER_ENUM( prop_name, type, type_ref )                          \
+    {                                                                          \
+      yat::Any& prop_value = prop_values[prop_name];                           \
+      GRABLOG( "Get Pluggin property " << prop_name << " (enum)");             \
+      if (!prop_value.empty()){                                                \
+        type_ref = static_cast<type>(yat::any_cast<yat_int16_t>(prop_value));  \
+        }\
+    }
+
+    REGISTER_PROP("ExposureTime",             double,             init_cfg.exposure_time);
+    REGISTER_PROP("FrameRate",                double,             init_cfg.frame_rate);
+    REGISTER_PROP("Gain",                     double,             init_cfg.gain);
+    REGISTER_PROP("BlackLevel",               yat_uint16_t,       init_cfg.blacklevel);
+    REGISTER_ENUM("TriggerMode",              Mode,               init_cfg.acq_mode);
+    REGISTER_ENUM("TriggerLine",              TriggerSourceEnums, init_cfg.trigger_line);
+    REGISTER_ENUM("TriggerActivation",        TriggerActivation,  init_cfg.trigger_activation);
+    REGISTER_PROP("FrameTransmissionDelay",   yat_uint16_t,       init_cfg.frame_transmission_delay);
+    REGISTER_PROP("BinningVertical",          yat_uint16_t,       init_cfg.binning_vertical);
+    REGISTER_PROP("BinningHorizontal",        yat_uint16_t,       init_cfg.binning_horizontal);
+    REGISTER_PROP("EthernetPayloadPacketSize",yat_uint16_t,       init_cfg.ethernet_payload_packet_size);
 
     std::vector<yat_int32_t> roi;
     REGISTER_PROP("ROI", std::vector<yat_int32_t>, roi);
@@ -948,7 +1308,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
   // ============================================================================
   bool BaslerGrabber::is_open( void ) const
   {
-    return state == OPEN || state == RUNNING;
+    return state == OPEN || state == RUNNING || state == STANDBY;
   }
 
   // ============================================================================
@@ -968,18 +1328,27 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
   }
 
   // ============================================================================
+  // BaslerGrabber::is_camera_present
+  // ============================================================================
+  bool BaslerGrabber::is_camera_present( void ) const
+  {
+    return camera_present;
+  }
+
+  // ============================================================================
   // BaslerGrabber::open
   // ============================================================================
   void BaslerGrabber::open()
     throw (yat::Exception)
   {
     FUNCTION_NAME( "BaslerGrabber::open" );
-  
+    GRABLOG("BaslerGrabber::Open()");
     yat::MutexLock guard(this->mutex);
     try
     {
       transport_layer.reset( new TransportLayer() );
       camera.reset( new Camera(transport_layer, this->camera_ip) );
+      register_camera_removal_cb();//camera->registerRemovalCallback();
       stream_grabber.reset( new StreamGrabber(camera) );
       chunk_parser.reset( new ChunkParser(camera) );
 
@@ -1006,6 +1375,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     throw (yat::Exception)
   {
     FUNCTION_NAME( "BaslerGrabber::close" );
+    GRABLOG("BaslerGrabber::Close()");
     yat::MutexLock guard(this->mutex);
     try
     {
@@ -1014,6 +1384,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
       camera.reset();
       transport_layer.reset();
       this->state = CLOSE;
+      camera_present = false;
     }
     catch( GenICam::GenericException &e )
     {
@@ -1034,6 +1405,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     throw (yat::Exception)
   {
     FUNCTION_NAME( "BaslerGrabber::start" );
+    GRABLOG("BaslerGrabber::Start()");
     yat::MutexLock guard(this->mutex);
     try
     {
@@ -1089,6 +1461,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     throw (yat::Exception)
   {
     FUNCTION_NAME( "BaslerGrabber::stop" );
+    GRABLOG("BaslerGrabber::Stop()");
     yat::MutexLock guard(this->mutex);
     try
     {
@@ -1118,6 +1491,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     throw (yat::Exception)
   {
     FUNCTION_NAME( "BaslerGrabber::snap" );
+    GRABLOG("BaslerGrabber::Snap()");
     yat::MutexLock guard(this->mutex);
     try
     {
@@ -1292,6 +1666,20 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
   }
 
   // ============================================================================
+  // BaslerGrabber::reset_camera
+  // ============================================================================
+  void BaslerGrabber::reset_camera()
+    throw (yat::Exception)
+  {
+    //FUNCTION_NAME( "BaslerGrabber::reset_camera" );
+    GRABLOG("BaslerGrabber::ResetCamera()");
+    yat::MutexLock guard(this->mutex);
+
+    this->camera.reset();
+    this->camera->get().DeviceReset.Execute();
+  }
+
+  // ============================================================================
   // BaslerGrabber::get_settings
   // ============================================================================
   void BaslerGrabber::get_settings( yat::PlugInPropValues& prop_values ) const
@@ -1326,12 +1714,11 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     throw (yat::Exception)
   {
     FUNCTION_NAME( "BaslerGrabber::set_exposure_time" );
+    yat::MutexLock guard(this->mutex);
     if (!this->is_open())
     {
       THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the exposure time");
     }
-
-    yat::MutexLock guard(this->mutex);
 
     bool was_running = false;
     if (this->is_running())
@@ -1481,7 +1868,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
       long value = this->_raw_get_bit_depth();
       if (value == 0)
         THROW_YAT("UNKNOWN_VALUE", "Bit depth value is not supported");
-      container = static_cast<yat_int32_t>(value);
+      container = static_cast<yat_int16_t>(value);
     }
     catch( GenICam::GenericException &e )
     {
@@ -1512,8 +1899,8 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
 
     try
     {
-      yat_int32_t value = static_cast<yat_int32_t>( this->camera->get().SensorWidth.GetValue() );
-      container = value;
+      yat_int16_t value = static_cast<yat_int16_t>( this->camera->get().SensorWidth.GetValue() );
+      container = yat::any_cast<yat_int16_t>(value);
     }
     catch( GenICam::GenericException &e )
     {
@@ -1540,8 +1927,8 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
 
     try
     {
-      yat_int32_t value = static_cast<yat_int32_t>( this->camera->get().SensorHeight.GetValue() );
-      container = value;
+      yat_int16_t value = static_cast<yat_int16_t>( this->camera->get().SensorHeight.GetValue() );
+      container = yat::any_cast<yat_int16_t>(value);
     }
     catch( GenICam::GenericException &e )
     {
@@ -1550,6 +1937,34 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     catch(...)
     {
       THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting sensor height");
+    }
+  }
+
+  // ============================================================================
+  // BaslerGrabber::get_sensor_board_temperature
+  // ============================================================================
+  void BaslerGrabber::get_sensor_board_temperature( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_sensor_board_temperature" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the sensor board temperature");
+    }
+
+    try
+    {
+      double value = static_cast<double>(this->camera->get().TemperatureAbs.GetValue());
+      container = value;
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting sensor board temperature");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting sensor board temperature");
     }
   }
 
@@ -1576,7 +1991,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
 
     try
     {
-      yat_int32_t mode = yat::any_cast<yat_int32_t>(container);
+      yat_int16_t mode = yat::any_cast<yat_int16_t>(container);
       if ( mode == 0 )
       {
         //- INTERNAL
@@ -1635,11 +2050,11 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     try
     {
       if (this->camera->get().TriggerMode.GetValue() == TriggerMode_Off)
-        container = yat_int32_t(0);
+        container = yat_int16_t(0);
       else if (this->camera->get().ExposureMode.GetValue() != ExposureMode_TriggerWidth)
-        container = yat_int32_t(1);
+        container = yat_int16_t(1);
       else
-        container = yat_int32_t(2);
+        container = yat_int16_t(2);
     }
     catch( GenICam::GenericException &e )
     {
@@ -1673,7 +2088,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
 
     try
     {
-      TriggerActivation trigger_activation = static_cast<TriggerActivation>(yat::any_cast<yat_int32_t>(container));
+      TriggerActivation trigger_activation = static_cast<TriggerActivation>(yat::any_cast<yat_int16_t>(container));
       if ( trigger_activation !=  TriggerActivation_RisingEdge
            && trigger_activation !=  TriggerActivation_FallingEdge)
       {
@@ -1715,7 +2130,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
 
     try
     {
-      container = static_cast<yat_int32_t>(this->camera->get().TriggerActivation.GetValue());
+      container = static_cast<yat_int16_t>(this->camera->get().TriggerActivation.GetValue());
     }
     catch( GenICam::GenericException &e )
     {
@@ -1750,7 +2165,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     
     try
     {
-      TriggerSourceEnums trigger_line = static_cast<TriggerSourceEnums>(yat::any_cast<yat_int32_t>(container));
+      TriggerSourceEnums trigger_line = static_cast<TriggerSourceEnums>(yat::any_cast<yat_int16_t>(container));
       
       if (trigger_line !=  TriggerSource_Line1
           && trigger_line !=  TriggerSource_Line2)
@@ -1794,7 +2209,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
 
     try
     {
-      container = static_cast<yat_int32_t>(this->camera->get().TriggerSource.GetValue());
+      container = static_cast<yat_int16_t>(this->camera->get().TriggerSource.GetValue());
     }
     catch( GenICam::GenericException &e )
     {
@@ -1832,6 +2247,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     {
       THROW_GENICAM( e, "Error when rounding value");
     }
+    return NULL;
   }
 
   // ============================================================================
@@ -1883,7 +2299,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
       double raw = ::ceil( exposure_time_ms / 50 );
       this->camera->get().ExposureTimeRaw = static_cast<yat_int32_t>(raw);
       raw = static_cast<double>(this->camera->get().ExposureTimeRaw());
-      double base = 1E3 * exposure_time_ms / raw;
+      //double base = 1E3 * exposure_time_ms / raw;//unused
       this->camera->get().ExposureTimeBaseAbs = 1E3 * exposure_time_ms / this->camera->get().ExposureTimeRaw();
       
       this->disable_callback = false;
@@ -1926,7 +2342,12 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
 
     try
     {
-      this->camera->get().GainRaw.SetValue( yat::any_cast<yat_int32_t>(container) );
+      double percentage = yat::any_cast<double>(container);
+      yat_uint16_t minvalue = static_cast<yat_uint16_t>(this->camera->get().GainRaw.GetMin());
+      yat_uint16_t maxvalue = static_cast<yat_uint16_t>(this->camera->get().GainRaw.GetMax());
+      yat_uint16_t value = static_cast<yat_uint16_t>(((maxvalue-minvalue)*percentage)/100)+minvalue;
+      //this->camera->get().GainRaw.SetValue( yat::any_cast<yat_uint16_t>(container) );
+      this->camera->get().GainRaw.SetValue( value );
     }
     catch( GenICam::GenericException &e )
     {
@@ -1957,7 +2378,11 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
 
     try
     {
-      container = static_cast<yat_int32_t>(this->camera->get().GainRaw.GetValue());
+      yat_uint16_t minvalue = static_cast<yat_uint16_t>(this->camera->get().GainRaw.GetMin());
+      yat_uint16_t maxvalue = static_cast<yat_uint16_t>(this->camera->get().GainRaw.GetMax());
+      yat_uint16_t value = static_cast<yat_uint16_t>(this->camera->get().GainRaw.GetValue());
+      double percentage = ((value-minvalue)*100)/(maxvalue-minvalue);
+      container = yat::any_cast<double>(percentage);
     }
     catch( GenICam::GenericException &e )
     {
@@ -1991,7 +2416,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
 
     try
     {
-      this->camera->get().BlackLevelRaw.SetValue( yat::any_cast<yat_int32_t>(container) );
+      this->camera->get().BlackLevelRaw.SetValue( yat::any_cast<yat_uint16_t>(container) );
     }
     catch( GenICam::GenericException &e )
     {
@@ -2022,7 +2447,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
 
     try
     {
-      container = static_cast<yat_int32_t>(this->camera->get().BlackLevelRaw.GetValue());
+      container = static_cast<yat_uint16_t>(this->camera->get().BlackLevelRaw.GetValue());
     }
     catch( GenICam::GenericException &e )
     {
@@ -2066,7 +2491,7 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
       THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Acquisition must be stopped before changing the internal acquisition buffer number");
     }
 
-    acquisition_buffer_nb = yat::any_cast<yat_int32_t>(container);
+    acquisition_buffer_nb = yat::any_cast<yat_uint32_t>(container);
   }
 
   // ============================================================================
@@ -2078,17 +2503,81 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     container = acquisition_buffer_nb;
   }
 
+//  // ============================================================================
+//  // BaslerGrabber::set_averaging
+//  // ============================================================================
+//  void BaslerGrabber::set_averaging( const yat::Any& container )
+//    throw (yat::Exception)
+//  {
+//    FUNCTION_NAME( "BaslerGrabber::set_averaging" );
+//    yat::MutexLock guard(this->mutex);
+//    if (!this->is_open())
+//    {
+//      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set Averaging");
+//    }
+//
+//    bool was_running = false;
+//    if (this->is_running())
+//    {
+//      this->stop();
+//      was_running = true;
+//    }
+//
+//    try
+//    {
+//      this->camera->get().AveragingNumberOfFrames.SetValue( yat::any_cast<yat_int32_t>(container) );
+//    }
+//    catch( GenICam::GenericException &e )
+//    {
+//      THROW_GENICAM(e, "Error when setting Averaging");
+//    }
+//    catch(...)
+//    {
+//      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting Averaging");
+//    }
+//
+//    if ( was_running )
+//      this->start();
+//  }
+
+//  // ============================================================================
+//  // BaslerGrabber::get_averaging
+//  // ============================================================================
+//  void BaslerGrabber::get_averaging( yat::Any& container )
+//    throw (yat::Exception)
+//  {
+//    FUNCTION_NAME( "BaslerGrabber::get_averaging" );
+//    yat::MutexLock guard(this->mutex);
+//    if (!this->is_open())
+//    {
+//      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get Averaging");
+//    }
+//
+//    try
+//    {
+//      container = static_cast<yat_int32_t>(this->camera->get().AveragingNumberOfFrames.GetValue());
+//    }
+//    catch( GenICam::GenericException &e )
+//    {
+//      THROW_GENICAM(e, "Error when getting Averaging");
+//    }
+//    catch(...)
+//    {
+//      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting Averaging");
+//    }
+//  }
+
   // ============================================================================
-  // BaslerGrabber::set_averaging
+  // BaslerGrabber::set_frame_transmission_delay
   // ============================================================================
-  void BaslerGrabber::set_averaging( const yat::Any& container )
+  void BaslerGrabber::set_frame_transmission_delay( const yat::Any& container )
     throw (yat::Exception)
   {
-    FUNCTION_NAME( "BaslerGrabber::set_averaging" );
+    FUNCTION_NAME( "BaslerGrabber::set_frame_transmission_delay" );
     yat::MutexLock guard(this->mutex);
     if (!this->is_open())
     {
-      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set Averaging");
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the frame transmission delay");
     }
 
     bool was_running = false;
@@ -2100,45 +2589,930 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
 
     try
     {
-      this->camera->get().AveragingNumberOfFrames.SetValue( yat::any_cast<yat_int32_t>(container) );
+      this->camera->get().GevSCFTD.SetValue( yat::any_cast<yat_uint16_t>(container) );
     }
     catch( GenICam::GenericException &e )
     {
-      THROW_GENICAM(e, "Error when setting Averaging");
+      THROW_GENICAM(e, "Error when setting frame transmission delay");
     }
     catch(...)
     {
-      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting Averaging");
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting frame transmission delay");
     }
 
     if ( was_running )
       this->start();
   }
 
+
   // ============================================================================
-  // BaslerGrabber::get_averaging
+  // BaslerGrabber::get_frame_transmission_delay
   // ============================================================================
-  void BaslerGrabber::get_averaging( yat::Any& container )
+  void BaslerGrabber::get_frame_transmission_delay( yat::Any& container )
     throw (yat::Exception)
   {
-    FUNCTION_NAME( "BaslerGrabber::get_averaging" );
+    FUNCTION_NAME( "BaslerGrabber::get_frame_transmission_delay" );
     yat::MutexLock guard(this->mutex);
     if (!this->is_open())
     {
-      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get Averaging");
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the frame transmission delay");
     }
 
     try
     {
-      container = static_cast<yat_int32_t>(this->camera->get().AveragingNumberOfFrames.GetValue());
+      container = static_cast<yat_uint16_t>(this->camera->get().GevSCFTD.GetValue());
     }
     catch( GenICam::GenericException &e )
     {
-      THROW_GENICAM(e, "Error when getting Averaging");
+      THROW_GENICAM(e, "Error when getting frame transmission delay");
     }
     catch(...)
     {
-      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting Averaging");
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting frame transmission delay");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::set_packet_transmission_delay
+  // ============================================================================
+  void BaslerGrabber::set_packet_transmission_delay( const yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::set_packet_transmission_delay" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the packet transmission delay");
+    }
+
+    bool was_running = false;
+    if (this->is_running())
+    {
+      this->stop();
+      was_running = true;
+    }
+
+    try
+    {
+      this->camera->get().GevSCPD.SetValue( yat::any_cast<yat_uint16_t>(container) );
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when setting packet transmission delay");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting packet transmission delay");
+    }
+
+    if ( was_running )
+      this->start();
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_packet_transmission_delay
+  // ============================================================================
+  void BaslerGrabber::get_packet_transmission_delay( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_packet_transmission_delay" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the packet transmission delay");
+    }
+
+    try
+    {
+      container = static_cast<yat_uint16_t>(this->camera->get().GevSCPD.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting packet transmission delay");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting packet transmission delay");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::set_binning_vertical
+  // ============================================================================
+  void BaslerGrabber::set_binning_vertical( const yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::set_binning_vertical" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the vertical binning");
+    }
+
+    bool was_running = false;
+    if (this->is_running())
+    {
+      this->stop();
+      was_running = true;
+    }
+
+    try
+    {
+      this->camera->get().BinningVertical.SetValue( yat::any_cast<yat_uint16_t>(container) );
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when setting vertical binning");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting vertical binning");
+    }
+
+    if ( was_running )
+      this->start();
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_binning_vertical
+  // ============================================================================
+  void BaslerGrabber::get_binning_vertical( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_binning_vertical" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the vertical binning");
+    }
+
+    try
+    {
+      container = static_cast<yat_uint16_t>(this->camera->get().BinningVertical.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting vertical binning");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting vertical binning");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::set_binning_horizontal
+  // ============================================================================
+  void BaslerGrabber::set_binning_horizontal( const yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::set_binning_horizontal" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the horizontal binning");
+    }
+
+    bool was_running = false;
+    if (this->is_running())
+    {
+      this->stop();
+      was_running = true;
+    }
+
+    try
+    {
+      this->camera->get().BinningHorizontal.SetValue( yat::any_cast<yat_uint16_t>(container) );
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when setting horizontal binning");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting horizontal binning");
+    }
+
+    if ( was_running )
+      this->start();
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_binning_horizontal
+  // ============================================================================
+  void BaslerGrabber::get_binning_horizontal( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_binning_horizontal" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the horizontal binning");
+    }
+
+    try
+    {
+      container = static_cast<yat_uint16_t>(this->camera->get().BinningHorizontal.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting horizontal binning");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting horizontal binning");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::set_ethernet_payload_packet_size
+  // ============================================================================
+  void BaslerGrabber::set_ethernet_payload_packet_size( const yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::set_ethernet_payload_packet_size" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the ethernet payload packet size");
+    }
+
+    bool was_running = false;
+    if (this->is_running())
+    {
+      this->stop();
+      was_running = true;
+    }
+
+    try
+    {
+      this->camera->get().GevSCPSPacketSize.SetValue( yat::any_cast<yat_uint16_t>(container) );
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when setting ethernet payload packet size");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting ethernet payload packet size");
+    }
+
+    if ( was_running )
+      this->start();
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_ethernet_payload_packet_size
+  // ============================================================================
+  void BaslerGrabber::get_ethernet_payload_packet_size( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_ethernet_payload_packet_size" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the ethernet payload packet size");
+    }
+
+    try
+    {
+      container = static_cast<yat_uint16_t>(this->camera->get().GevSCPSPacketSize.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting ethernet payload packet size");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting ethernet payload packet size");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_ethernet_payload_image_size
+  // ============================================================================
+  void BaslerGrabber::get_ethernet_payload_image_size( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_ethernet_payload_image_size" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the ethernet payload image size");
+    }
+
+    try
+    {
+      container = static_cast<yat_uint16_t>(this->camera->get().PayloadSize.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting ethernet payload image size");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting ethernet payload image size");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::set_ethernet_enable_resend
+  // ============================================================================
+  void BaslerGrabber::set_ethernet_enable_resend( const yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::set_ethernet_enable_resend" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the ethernet enable resend");
+    }
+
+    bool was_running = false;
+    if (this->is_running())
+    {
+      this->stop();
+      was_running = true;
+    }
+
+    try
+    {
+      this->stream_grabber->get().EnableResend.SetValue( yat::any_cast<bool>(container) );
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when setting ethernet enable resend");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting ethernet enable resend");
+    }
+
+    if ( was_running )
+      this->start();
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_ethernet_enable_resend
+  // ============================================================================
+  void BaslerGrabber::get_ethernet_enable_resend( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_ethernet_enable_resend" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the ethernet enable resend");
+    }
+
+    try
+    {
+      container = static_cast<bool>(this->stream_grabber->get().EnableResend.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting ethernet enable resend");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting ethernet enable resend");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::set_ethernet_packet_timeout
+  // ============================================================================
+  void BaslerGrabber::set_ethernet_packet_timeout( const yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::set_ethernet_packet_timeout" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the ethernet packet timeout");
+    }
+
+    bool was_running = false;
+    if (this->is_running())
+    {
+      this->stop();
+      was_running = true;
+    }
+
+    try
+    {
+      this->stream_grabber->get().PacketTimeout.SetValue( yat::any_cast<yat_uint16_t>(container) );
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when setting ethernet packet timeout");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting ethernet packet timeout");
+    }
+
+    if ( was_running )
+      this->start();
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_ethernet_packet_timeout
+  // ============================================================================
+  void BaslerGrabber::get_ethernet_packet_timeout( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_ethernet_packet_timeout" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the ethernet packet timeout");
+    }
+
+    try
+    {
+      container = static_cast<yat_uint16_t>(this->stream_grabber->get().PacketTimeout.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting ethernet packet timeout");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting ethernet packet timeout");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::set_ethernet_frame_retention
+  // ============================================================================
+  void BaslerGrabber::set_ethernet_frame_retention( const yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::set_ethernet_frame_retention" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the ethernet frame retention");
+    }
+
+    bool was_running = false;
+    if (this->is_running())
+    {
+      this->stop();
+      was_running = true;
+    }
+
+    try
+    {
+      this->stream_grabber->get().FrameRetention.SetValue( yat::any_cast<yat_uint16_t>(container) );
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when setting ethernet frame retention");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting ethernet frame retention");
+    }
+
+    if ( was_running )
+      this->start();
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_ethernet_frame_retention
+  // ============================================================================
+  void BaslerGrabber::get_ethernet_frame_retention( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_ethernet_frame_retention" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the ethernet frame retention");
+    }
+
+    try
+    {
+      container = static_cast<yat_uint16_t>(this->stream_grabber->get().FrameRetention.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting ethernet frame retention");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting ethernet frame retention");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::set_ethernet_receive_window_size
+  // ============================================================================
+  void BaslerGrabber::set_ethernet_receive_window_size( const yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::set_ethernet_receive_window_size" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the ethernet receive window size");
+    }
+
+    bool was_running = false;
+    if (this->is_running())
+    {
+      this->stop();
+      was_running = true;
+    }
+
+    try
+    {
+      this->stream_grabber->get().ReceiveWindowSize.SetValue( yat::any_cast<yat_uint16_t>(container) );
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when setting ethernet receive window size");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting ethernet receive window size");
+    }
+
+    if ( was_running )
+      this->start();
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_ethernet_receive_window_size
+  // ============================================================================
+  void BaslerGrabber::get_ethernet_receive_window_size( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_ethernet_receive_window_size" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the ethernet receive window size");
+    }
+
+    try
+    {
+      container = static_cast<yat_uint16_t>(this->stream_grabber->get().ReceiveWindowSize.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting ethernet receive window size");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting ethernet receive window size");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_ethernet_bandwidth_use
+  // ============================================================================
+  void BaslerGrabber::get_ethernet_bandwidth_use( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_ethernet_bandwidth_use" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the ethernet bandwidth use");
+    }
+
+    try
+    {
+      container = static_cast<yat_uint16_t>(this->camera->get().GevSCBWA.GetValue());
+      //FIXME: or it's the GevSCDCT?
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting ethernet bandwidth use");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting ethernet bandwidth use");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_firmware_version
+  // ============================================================================
+  void BaslerGrabber::get_firmware_version( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_firmware_version" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the firmware version");
+    }
+
+    try
+    {
+      std::string value = static_cast<std::string>(this->camera->get().DeviceFirmwareVersion.GetValue());
+      size_t where = static_cast<size_t>(value.find(';V'));
+      container = value.substr(where,value.size() - where);
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting firmware version");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting firmware version");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_device_version
+  // ============================================================================
+  void BaslerGrabber::get_device_version( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_device_version" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the device version");
+    }
+
+    try
+    {
+      container = static_cast<std::string>(this->camera->get().DeviceVersion.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting device version");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting device version");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_device_model
+  // ============================================================================
+  void BaslerGrabber::get_device_model( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_device_model" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the device model");
+    }
+
+    try
+    {
+      container = static_cast<std::string>(this->camera->get().DeviceModelName.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting device model");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting device model");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_serial_number
+  // ============================================================================
+  void BaslerGrabber::get_serial_number( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_serial_number" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the serial number");
+    }
+
+    try
+    {
+      container = static_cast<std::string>(this->camera->get().DeviceID.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting serial number");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting serial number");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::set_acquisition_frame_count
+  // ============================================================================
+  void BaslerGrabber::set_acquisition_frame_count( const yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::set_acquisition_frame_count" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the acquisition frame count");
+    }
+
+    if (this->is_running())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must NOT be RUNNING to set the acquisition frame count");
+    }
+
+    try
+    {
+      this->camera->get().AcquisitionFrameCount.SetValue( yat::any_cast<yat_uint16_t>(container) );
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when setting acquisition frame count");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting acquisition frame count");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_acquisition_frame_count
+  // ============================================================================
+  void BaslerGrabber::get_acquisition_frame_count( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_acquisition_frame_count" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the acquisition frame count");
+    }
+
+    try
+    {
+      container = static_cast<yat_uint16_t>(this->camera->get().AcquisitionFrameCount.GetValue());
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting acquisition frame count");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting acquisition frame count");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::set_pixel_format
+  // ============================================================================
+  void BaslerGrabber::set_pixel_format( const yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::set_pixel_format" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to set the pixel format");
+    }
+
+    bool was_running = false;
+    if (this->is_running())
+    {
+      this->stop();
+      was_running = true;
+    }
+
+    try
+    {
+      pixel_format = yat::any_cast<std::string>(container);
+      if (pixel_format.compare("Mono8") == 0)
+        this->camera->get().PixelFormat.SetValue(PixelFormat_Mono8);
+      else if (pixel_format.compare("Mono12") == 0)
+        this->camera->get().PixelFormat.SetValue(PixelFormat_Mono12Packed);
+      else if (pixel_format.compare("Mono16") == 0)
+        this->camera->get().PixelFormat.SetValue(PixelFormat_Mono16);
+      else
+        THROW_YAT("UNSUPPORTED FORMAT", "This format is not supported.");
+
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when setting pixel format");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when setting pixel format");
+    }
+
+    if ( was_running )
+      this->start();
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_pixel_format
+  // ============================================================================
+  void BaslerGrabber::get_pixel_format( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_pixel_format" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the pixel format");
+    }
+
+    try
+    {
+      PixelFormatEnums pixelFormatInt = this->camera->get().PixelFormat.GetValue();
+      //std::cout << "pixel format = " << pixelFormat << std::endl;
+      switch( pixelFormatInt )
+        {
+          //MONO:
+          //8
+          case PixelFormat_Mono8: //PixelFormat_Mono8Signed
+            pixel_format = static_cast<std::string>("Mono8");break;
+          //12
+          case PixelFormat_Mono12Packed:
+            pixel_format = static_cast<std::string>("Mono12");break;
+          //16
+          case PixelFormat_Mono16:
+            pixel_format = static_cast<std::string>("Mono16");break;
+          //else
+          default:
+            pixel_format = static_cast<std::string>("Unknown");
+        }
+      container = pixel_format;
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting pixel format");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting pixel format");
+    }
+  }
+
+
+  // ============================================================================
+  // BaslerGrabber::get_last_timestamp
+  // ============================================================================
+  void BaslerGrabber::get_last_timestamp( yat::Any& container )
+    throw (yat::Exception)
+  {
+    FUNCTION_NAME( "BaslerGrabber::get_last_timestamp" );
+    yat::MutexLock guard(this->mutex);
+    if (!this->is_open())
+    {
+      THROW_YAT("ATTRIBUTE_UNAVAILABLE", "Device must be OPEN to get the time stamp");
+    }
+
+    try
+    {
+      //std::cout << "get_timestamp = " << last_timestamp << std::endl;
+      //container = yat::any_cast<yat_uint64_t>(last_timestamp);
+      container = static_cast<yat_uint64_t>(last_timestamp);
+
+    }
+    catch( GenICam::GenericException &e )
+    {
+      THROW_GENICAM(e, "Error when getting time stamp");
+    }
+    catch(...)
+    {
+      THROW_YAT("UNKNOWN_ERROR", "Unknown error when getting time stamp");
     }
   }
 
@@ -2157,16 +3531,27 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
       model_name_start += model_name[0];
       model_name_start += model_name[1];
 
+      GRABLOG("Device Model Name \"" << model_name << "\"");
       if ( model_name_start == "sc" )
       {
         model_family = DEVICE_MODEL_SCOUT;
+        GRABLOG("Recognized a Basler Scout");
       }
       else if ( model_name_start == "pi" )
       {
         model_family = DEVICE_MODEL_PILOT;
+        GRABLOG("Recognized a Basler Pilot");
+      }
+      else if ( model_name_start == "ac" )
+      {
+        model_family = DEVICE_MODEL_ACE;
+        GRABLOG("Recognized a Basler Ace");
+        THROW_YAT("UNKNOWN_CAMERA_MODEL", "Not yet supported 'Ace' model. Currently supported models are 'Scout' and 'Pilot'");
+        //at least problems with PixelFormat and ExposureTime settings
       }
       else
       {
+        GRABLOG("Not recognized camera");
         THROW_YAT("UNKNOWN_CAMERA_MODEL", "Unsupported camera model. Currently supported models are 'Scout' and 'Pilot'");
       }
 
@@ -2210,9 +3595,14 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
       }
       this->compute_min_max_exposure();
       this->do_set_exposure_time(init_cfg.exposure_time);
-      this->camera->get().GainRaw.SetValue( init_cfg.gain );
-      this->camera->get().BlackLevelRaw.SetValue( init_cfg.blacklevel );
+      yat_uint16_t minvalue = static_cast<yat_uint16_t>(this->camera->get().GainRaw.GetMin());
+      yat_uint16_t maxvalue = static_cast<yat_uint16_t>(this->camera->get().GainRaw.GetMax());
+      yat_uint16_t value = static_cast<yat_uint16_t>(((maxvalue-minvalue)*init_cfg.gain)/100)+minvalue;
+      //this->camera->get().GainRaw.SetValue( init_cfg.gain );
+      this->camera->get().GainRaw.SetValue( value );
 
+      this->camera->get().BlackLevelRaw.SetValue( init_cfg.blacklevel );
+      this->camera->get().GevSCFTD.SetValue( init_cfg.frame_transmission_delay);
 
       this->camera->get().ChunkModeActive.SetValue( true );
 
@@ -2257,6 +3647,29 @@ Averaging is supported only for Pilot camera. Should I do it myself to make it a
     this->camera->get().ExposureTimeBaseAbs = this->camera->get().ExposureTimeBaseAbs.GetMin();
     this->camera->get().ExposureTimeRaw = this->camera->get().ExposureTimeRaw.GetMin();
     this->min_exp_time = this->camera->get().ExposureTimeBaseAbs() * this->camera->get().ExposureTimeRaw();
+  }
+
+  void BaslerGrabber::register_camera_removal_cb()
+  {
+    GRABLOG("BaslerGrabber::register_camera_removal_cb()"
+            " Register Camera Surprise Removal Callback");
+
+    Pylon::IPylonDevice* m_pCamera = camera->get().GetDevice();
+    GrabAPI::BaslerGrabber &ref2this = *this;
+    this->camera_present = true;
+    camera->setRemovalHandle(Pylon::RegisterRemovalCallback(m_pCamera,ref2this,&BaslerGrabber::removal_callback_method));
+  }
+
+  void BaslerGrabber::removal_callback_method(Pylon::IPylonDevice* ipyloncamera)
+  {
+    GRABLOG("BaslerGrabber::removal_callback_method()"
+            " Detected camera surprise removal");
+    GRABLOG("BaslerGrabber::removal_callback_method() Deregister callback");
+    ipyloncamera->DeregisterRemovalCallback(camera->getRemovalHandle());
+    this->state = FAULT;
+    this->camera_present = false;
+    GRABLOG("BaslerGrabber::removal_callback_method() change state to fault");
+
   }
 
 }

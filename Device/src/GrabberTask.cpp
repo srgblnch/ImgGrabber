@@ -11,10 +11,16 @@
 #include <iostream>
 #include <sstream>
 
+//FIXME: are all of them need? Can someone be removed?
 #include <isl/ErrorHandler.h>
 #include <isl/Exception.h>
 #include <isl/Image.h>
 #include <isl/movie/MovieWriter.h>
+
+       //#include <unistd.h>
+       #include <sys/syscall.h>   /* For SYS_xxx definitions */
+       //#include <sys/time.h>
+       #include <sys/resource.h>
 
 #include <memory>
 
@@ -42,6 +48,12 @@ namespace GrabAPI
   const std::string STATUS_MSG_FAULT    = "Grabber encountered a fatal error\n"
                                           "Call 'Init' to re-init the device";
 
+  const std::string STATUS_MSG_ALARM    = "Grabber encountered an error:\n"
+                                          "Check the device attributes (would be the trigger) or \n"
+                                          "Check the camera behaviour (maybe with other grabbers).";
+
+  const std::string STATUS_MSG_STANDBY  = "Grabber is waiting for a trigger";
+
   const std::string STATUS_MSG_UNKNOWN  = "Grabber is in an unknown state";
 
 
@@ -60,7 +72,7 @@ namespace GrabAPI
                     0 ) ),
       grabber(0),
       last_image(0),
-      movie_writer(0),
+      //movie_writer(0),//splited to a separeted object.
       image_available_observer_sig(sig)
   {
   }
@@ -70,7 +82,7 @@ namespace GrabAPI
   // ============================================================================
   GrabberTask::~GrabberTask()
   {
-    SAFE_DELETE_PTR(this->movie_writer);
+    //SAFE_DELETE_PTR(this->movie_writer);
     SAFE_RELEASE(last_image);
     this->release_grabber();
   }
@@ -117,21 +129,37 @@ namespace GrabAPI
   void GrabberTask::handle_message(yat::Message& _msg)
     throw (yat::Exception)
   {
-    switch (_msg.type())
+    try{
+      std::cout << "GrabberTask::handle_message("<<std::dec<<_msg.type()<<")" << std::endl;
+      switch (_msg.type())
+      {
+        case yat::TASK_INIT:         this->on_init(_msg);            break;
+        case yat::TASK_EXIT:         this->on_exit();                break;
+        case yat::TASK_TIMEOUT:                                      break;
+        case kMSG_OPEN:              this->on_open();                break;
+        case kMSG_CLOSE:             this->on_close();               break;
+        case kMSG_START:             this->on_start();               break;
+        case kMSG_STOP:              this->on_stop();                break;
+        case kMSG_SNAP:              this->on_snap();                break;
+        case kMSG_START_RECORDING:   this->on_start_recording(_msg); break;
+        case kMSG_STOP_RECORDING:    this->on_stop_recording();      break;
+        case kMSG_SET_ROI:           this->on_set_roi(_msg);         break;
+        case kMSG_RESET_ROI:         this->on_reset_roi();           break;
+        case kMSG_SAVE_SETTING:      this->on_save_settings();       break;
+        case kMSG_RESET_CAMERA:      this->on_reset_camera();        break;
+      }
+    }
+    catch(yat::Exception& ex)
     {
-    case yat::TASK_INIT:         this->on_init(_msg);            break;
-    case yat::TASK_EXIT:         this->on_exit();                break;
-    case yat::TASK_TIMEOUT:                                      break;
-    case kMSG_OPEN:              this->on_open();                break;
-    case kMSG_CLOSE:             this->on_close();               break;
-    case kMSG_START:             this->on_start();               break;
-    case kMSG_STOP:              this->on_stop();                break;
-    case kMSG_SNAP:              this->on_snap();                break;
-    case kMSG_START_RECORDING:   this->on_start_recording(_msg); break;
-    case kMSG_STOP_RECORDING:    this->on_stop_recording();      break;
-    case kMSG_SET_ROI:           this->on_set_roi(_msg);         break;
-    case kMSG_RESET_ROI:         this->on_reset_roi();           break;
-    case kMSG_SAVE_SETTING:      this->on_save_settings();       break;
+        std::cout << "GrabberTask::handle_message() YAT Exception! " << ex.errors[0].desc << std::endl;
+        RETHROW_YAT_ERROR(ex,
+                          "HARDWARE_ERROR",
+                          "error during handle_message",
+                          "GrabberTask::handle_message");
+    }
+    catch(...)
+    {
+      std::cout << "GrabberTask::handle_message() Exception!" << std::endl;
     }
   }
 
@@ -140,7 +168,11 @@ namespace GrabAPI
     throw (yat::Exception)
   {
     //- extract the Grabber object from the msg
-    
+    // struct sched_param param;
+    // param.sched_priority = 50;
+    // pthread_setschedparam(pthread_self(), SCHED_RR, &param);
+    int ret = setpriority(PRIO_PROCESS, syscall(SYS_gettid), -19);
+
     std::auto_ptr<GrabberTaskInit> init_cfg;
     try
     {
@@ -187,9 +219,23 @@ namespace GrabAPI
 
     try
     {
-      if (init_cfg->auto_start) 
+      if (init_cfg->auto_open)
       {
-        this->on_start();
+        std::cout << "GrabberTask::on_init() Open() from Init()" << std::endl;
+        this->on_open();
+        if (init_cfg->auto_start)
+        {
+          std::cout << "GrabberTask::on_init() Start() from Init()" << std::endl;
+          this->on_start();
+        }
+        else
+        {
+          std::cout << "GrabberTask::on_init() skip Start() from Init()" << std::endl;
+        }
+      }
+      else
+      {
+        std::cout << "GrabberTask::on_init() skip Open() from Init()" << std::endl;
       }
     }
     catch(yat::Exception& ex)
@@ -320,7 +366,9 @@ namespace GrabAPI
       return;
     }
 
-    if ( !this->grabber->is_open() && !this->grabber->is_closed() )
+    if ( !this->grabber->is_open() && \
+         !this->grabber->is_closed() && \
+         this->grabber->get_state() != ALARM)
     {
       THROW_YAT_ERROR("SEQUENCE_ERROR",
                       "You cannot call START if the device is not OPEN or CLOSE",
@@ -369,7 +417,9 @@ namespace GrabAPI
       return;
     }
 
-    if ( !this->grabber->is_running() )
+    if ( !this->grabber->is_running() && \
+         this->grabber->get_state() != STANDBY && \
+         this->grabber->get_state() != ALARM)
     {
       THROW_YAT_ERROR("SEQUENCE_ERROR",
                       "You cannot call STOP if the device is not RUNNING",
@@ -597,6 +647,8 @@ namespace GrabAPI
         HANDLE_TYPE( yat::PlugInPropType::UINT16, yat_uint16_t );
         HANDLE_TYPE( yat::PlugInPropType::INT32, yat_int32_t );
         HANDLE_TYPE( yat::PlugInPropType::UINT32, yat_uint32_t );
+        HANDLE_TYPE( yat::PlugInPropType::INT64, yat_int64_t );
+        HANDLE_TYPE( yat::PlugInPropType::UINT64, yat_uint64_t );
         HANDLE_TYPE( yat::PlugInPropType::FLOAT, float );
         HANDLE_TYPE( yat::PlugInPropType::DOUBLE, double );
         HANDLE_TYPE( yat::PlugInPropType::STRING, std::string );
@@ -605,6 +657,8 @@ namespace GrabAPI
         HANDLE_TYPE( yat::PlugInPropType::UINT16_VECTOR, std::vector<yat_uint16_t> );
         HANDLE_TYPE( yat::PlugInPropType::INT32_VECTOR, std::vector<yat_int32_t> );
         HANDLE_TYPE( yat::PlugInPropType::UINT32_VECTOR, std::vector<yat_uint32_t> );
+        HANDLE_TYPE( yat::PlugInPropType::INT64_VECTOR, std::vector<yat_int64_t> );
+        HANDLE_TYPE( yat::PlugInPropType::UINT64_VECTOR, std::vector<yat_uint64_t> );
         HANDLE_TYPE( yat::PlugInPropType::FLOAT_VECTOR, std::vector<float> );
         HANDLE_TYPE( yat::PlugInPropType::DOUBLE_VECTOR, std::vector<double> );
       }
@@ -627,94 +681,11 @@ namespace GrabAPI
   //! START_RECORDING msg handler
   void GrabberTask::on_start_recording(yat::Message& _msg)
     throw (yat::Exception)
-  {
-    if ( this->is_saving_movie() )
-    {
-      THROW_YAT_ERROR("SEQUENCE_ERROR",
-                      "A movie is already being saved. Stop the current movie first",
-                      "GrabberTask::on_start_recording");
-    }
-
-
-    //- check if it is possible to save a video
-    //- there are problem in the movie when the width of an image is odd
-    
-    ROI r = this->get_roi();
-    if( (r.width & 1) != 0 )
-    {
-      THROW_YAT_ERROR("DIMENSION_ERROR",
-                      "The width of the image must have an even number of pixels\n"
-                      "Use the 'SetROI' command to define a ROI suitable for saving a movie",
-                      "GrabberTask::on_start_recording");
-    }
-
-    //- extract the RecordMovieConfig object from the msg
-    try
-    {
-      RecordMovieConfig* recmovie_config = 0;
-      _msg.detach_data(recmovie_config);
-      this->movie_config = *recmovie_config;
-      SAFE_DELETE( recmovie_config );
-    }
-    catch(yat::Exception& ex)
-    {
-      RETHROW_YAT_ERROR(ex,
-                        "SOFTWARE_FAILURE",
-                        "Unable to detach RecordMovieConfig from a message",
-                        "GrabberTask::on_start_recording");
-    }
-    catch(...)
-    {
-      THROW_YAT_ERROR("UNKNOWN_ERROR",
-                      "Unable to detach RecordMovieConfig from a message",
-                      "GrabberTask::on_start_recording");
-    }
-
-    try
-    {
-      //- get the bit depth from the grabber object
-      yat::Any container;
-      this->grabber->get_bit_depth( container );
-      yat_int32_t bit_depth = yat::any_cast<yat_int32_t>(container);
-
-      isl::MovieConfig isl_conf;
-      isl_conf.format = this->movie_config.format;
-      isl_conf.file_basename = this->movie_config.file_basename;
-      isl_conf.bit_depth = bit_depth;
-      isl_conf.frame_rate = this->fps_computer.get_frame_rate();
-
-      this->movie_writer = isl::MovieWriterFactory::create( isl_conf );
-
-      _GET_TIME(this->movie_start);
-      this->movie_end = this->movie_start;
-      this->movie_end.tv_sec += static_cast<int>(this->movie_config.duration_s);
-
-      YAT_LOG( "Ready to write images to disk" );
-    }
-    catch(isl::Exception& isl_ex)
-    {
-      ISL2YATException ex(isl_ex);
-      isl::ErrorHandler::reset();
-      RETHROW_YAT_ERROR(ex,
-                        "ISL_ERROR",
-                        "Unable to instantiate MovieWriter",
-                        "GrabberTask::on_start_recording");
-    }
-    catch(...)
-    {
-      THROW_YAT_ERROR("UNKNOWN_ERROR",
-                      "Unable to instantiate MovieWriter",
-                      "GrabberTask::on_start_recording");
-    }
-  }
-
+  {}
   //! STOP_RECORDING msg handler
   void GrabberTask::on_stop_recording()
     throw (yat::Exception)
-  {
-    std::cout << "Finished saving movie" << std::endl;
-    SAFE_DELETE_PTR(this->movie_writer);
-  }
+  {}
 
   // ============================================================================
   // GrabberTask::get_roi
@@ -743,6 +714,41 @@ namespace GrabAPI
     return r;
   }
 
+  //! RESET_CAMERA msg handler
+  void GrabberTask::on_reset_camera()
+    throw (yat::Exception)
+  {
+    if ( !this->grabber->is_closed() )
+    {
+      THROW_YAT_ERROR("SEQUENCE_ERROR",
+                      "You cannot call RESET_CAMERA if the device is not in CLOSE state",
+                      "GrabberTask::on_reset_camera");
+    }
+
+    //- launch the reset_camera command on the grabber
+    try
+    {
+      this->grabber->reset_camera();
+    }
+    catch(yat::Exception& ex)
+    {
+      this->last_error_desc = "[ RESET_CAMERA failed : ";
+      this->last_error_desc += ex.errors[0].desc;
+      this->last_error_desc += " ]";
+      RETHROW_YAT_ERROR(ex,
+                        "HARDWARE_ERROR",
+                        "error during RESET_CAMERA",
+                        "GrabberTask::on_reset_camera");
+    }
+    catch(...)
+    {
+      this->last_error_desc = "[ RESET CAMERA failed : unknwon error ]";
+      THROW_YAT_ERROR("UNKNOWN_ERROR",
+                      "error during RESET_CAMERA",
+                      "GrabberTask::on_reset_camera");
+    }
+  }
+
   // ============================================================================
   // GrabberTask::image_callback
   // ============================================================================
@@ -756,32 +762,6 @@ namespace GrabAPI
 
       try
       {
-        if (this->movie_writer != 0)
-        {
-          isl::Image record_image( static_cast<int>(new_image->width()), static_cast<int>(new_image->height()), isl::ISL_STORAGE_USHORT );
-          record_image.unserialize(static_cast<void*>(new_image->base()));
-          
-          try
-          {
-            this->movie_writer->write_frame(record_image);
-            yat::Timestamp ts;
-            _GET_TIME( ts );
-            if ( _ELAPSED_SEC( this->movie_start, ts ) > this->movie_config.duration_s )
-            {
-              this->on_stop_recording();
-            }
-          }
-          catch( isl::Exception& ex )
-          {
-            isl::ErrorHandler::reset();
-            std::cout << "on_stop_recording" << std::endl;
-            this->on_stop_recording();
-            std::cout << "on_stop_recording ->" << std::endl;
-            throw ex;
-          }
-
-        }
-
         SharedImage* new_shared_image = new SharedImage(new_image);
         SharedImage* old_shared_image = this->last_image;
         this->last_image = new_shared_image;
@@ -857,7 +837,7 @@ namespace GrabAPI
   void GrabberTask::get_image_counter( yat::Any& container )
     throw (yat::Exception)
   {
-    container = this->fps_computer.get_image_counter();
+	  container = static_cast<yat_uint32_t>(this->fps_computer.get_image_counter());
   }
 
   // ============================================================================
@@ -882,8 +862,18 @@ namespace GrabAPI
       else
         _status = STATUS_MSG_RUNNING;
       break;
+    case STANDBY:
+      _status = STATUS_MSG_STANDBY;
+      break;
+    case ALARM:
+      _status =  STATUS_MSG_ALARM;
+      _status += "\n";
+      _status += this->last_error_desc;
+      break;
     case FAULT:
       _status =  STATUS_MSG_FAULT;
+      if (!this->is_camera_present())
+        _status += "\n[ CAMERA_REMOVAL : Unexpected camera removal, plug it again ]";
       _status += "\n";
       _status += this->last_error_desc;
       break;
@@ -907,26 +897,34 @@ namespace GrabAPI
   
   bool GrabberTask::is_saving_movie( void )
   {
-    return this->movie_writer != 0;
+    //return this->movie_writer_task->is_saving_movie();
+    //FIXME: Perhaps we should remove the method because it's split out to another object
+  }
+
+  bool GrabberTask::is_camera_present( void )
+  {
+    try
+    {
+      return this->grabber->is_camera_present();
+    }
+    catch(...)
+    {
+      return false;
+    }
   }
 
   std::string GrabberTask::movie_remaining_time( void )
   {
-    double elapsed;
-    if ( this->is_saving_movie() )
-    {
-      yat::Timestamp now;
-      _GET_TIME( now );
-      elapsed = _ELAPSED_SEC( now, this->movie_end );
-    }
-    else
-      elapsed = 0;
-
-    yat::OSStream oss;
-    oss << elapsed << " s" << std::ends;
-    return oss.str();
+    //return this->movie_writer_task->movie_remaining_time();
+    //FIXME: Perhaps we should remove the method because it's split out to another object
   }
 
+  int16_t GrabberTask::get_bit_depth() const
+  {
+    yat::Any container;
+    this->grabber->get_bit_depth( container );
+    return yat::any_cast<int16_t>(container);
+  }
 
   SharedImage::SharedImage( GrabAPI::Image* _image )
     : image(_image)

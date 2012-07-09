@@ -81,6 +81,7 @@ namespace GrabAPI
     try
     {
       this->callbacks_[dev].info.set_cb(container);
+      this->memorize_attribute(dev->name(),att.get_name(),write_value);
     }
     catch( yat::Exception& ex )
     {
@@ -96,6 +97,32 @@ namespace GrabAPI
                       "Unknwon error while writing a plugin attribute",
                       "PlugInAttr<T>::read");
     }
+  }
+
+  template <typename T>
+  void GrabberAttrT<T>::memorize_attribute(std::string devName,
+                                           std::string attrName,
+                                           T write_value)
+  {
+    try
+    {
+      std::cout << "memorize_attribute(" << attrName << "); ";
+      Tango::Database *db = new Tango::Database();
+      Tango::DbData db_data;
+      Tango::DbDatum dev_prop(attrName);
+      dev_prop << write_value;
+      db_data.push_back(dev_prop);
+      db->put_device_property(devName, db_data);
+      std::cout << "value=" << write_value << ";" << std::endl;
+    }
+    catch(...)
+    {
+        std::cout << "Malo!" << std::endl;
+        THROW_DEVFAILED("UNKNOWN_ERROR",
+                        "Tango error during memorize attribute ",
+                        "GrabberAttrT<std::string>::memorize_attribute");
+    }
+    
   }
 
   template <typename T>
