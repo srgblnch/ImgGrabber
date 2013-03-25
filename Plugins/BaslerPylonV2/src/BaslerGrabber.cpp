@@ -492,6 +492,7 @@ namespace GrabAPI
     AcqTask( BaslerGrabber& grabber_object, long nb_image )
       : grabber_( grabber_object ),
         nb_image_(nb_image),
+ 	current_nb_image_(0),
         size_x_(0),
         size_y_(0),
         first_image_received_( false ),
