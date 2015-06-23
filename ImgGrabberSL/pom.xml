@@ -39,9 +39,9 @@
     </build>
 
     <scm>
-        <connection>${scm.connection.cvs.tango-ds}:Instrumentation/CCD/ImgGrabber/ImgGrabberSL</connection>
-        <developerConnection>${scm.developerConnection.cvs.tango-ds}:Instrumentation/CCD/ImgGrabber/ImgGrabberSL</developerConnection>
-        <url>${scm.url.cvs.tango-ds}/Instrumentation/CCD/ImgGrabber/ImgGrabberSL</url>
+        <connection>${scm.connection.svn.tango-ds}/DeviceClasses/Acquisition/2D/ImgGrabber/trunk</connection>
+        <developerConnection>${scm.connection.svn.tango-ds}/DeviceClasses/Acquisition/2D/ImgGrabber/trunk</developerConnection>
+        <url>${scm.connection.svn.tango-ds}/DeviceClasses/Acquisition/2D/ImgGrabber/trunk</url>
     </scm>
 
     <developers>
