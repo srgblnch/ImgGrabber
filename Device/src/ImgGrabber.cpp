@@ -132,8 +132,9 @@ static const char *RcsId = "$Header: /users/chaize/newsvn/cvsroot/Instrumentatio
 //#include <ImgGrabber.h>
 #include <ImgGrabberClass.h>
 
-#include <yat4tango/PlugInAttr.h>
-#include <yat4tango/PlugInHelper.h>
+// Files not present in yat4tango 1.9
+//#include <yat4tango/PlugInAttr.h>
+//#include <yat4tango/PlugInHelper.h>
 #include <GrabberPluginManager.h>
 #include <GrabberTask.h>
 #include <GrabberAttr.h>
