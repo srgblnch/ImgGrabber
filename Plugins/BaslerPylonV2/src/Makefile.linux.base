@@ -72,6 +72,9 @@ PACKAGE_NAME = GrabPlugin_Basler
 INC_DIR_USER =  -I../../../ImgGrabberSL/include \
                 -I$(shell pkg-config --variable includedir yat) \
                 -I$(PYLON_ROOT)/include \
+                -I$(PYLON_ROOT)/include/GenApi \
+                -I$(PYLON_ROOT)/include/Base \
+                -I$(PYLON_ROOT)/include/pylon \
                 -I$(PYLON_ROOT)/genicam/library/CPP/include
 
 #=============================================================================
@@ -107,7 +110,13 @@ endif
 # -lHKL for HKL
 #
 
-LFLAGS_USR = -lpylonbase -lpylongigesupp
+ifeq ($(PYLON_ROOT) | grep pylon5$ | wc -w),1)
+    # -lpylongigesupp does not exist in Pylon5
+    LFLAGS_USR = -lpylonbase
+else
+    LFLAGS_USR = -lpylonbase -lpylonbase
+endif
+
 
 #=============================================================================
 # CXXFLAGS_USR lists the compilation flags specific for your library/device/exe
