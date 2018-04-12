@@ -6,22 +6,25 @@
 #
 #
 #=============================================================================
+ifndef MAKE_ENV
+    TANGO_HOME= $(shell pkg-config --variable prefix tango)
+    MAKE_ENV = $(TANGO_HOME)/share/pogo/preferences/
+endif
 
+# TODO: pylon will be installed/linked in /opt
+ifndef PYLON_ROOT
+    PYLON_ROOT = /opt/pylon5/
+endif
 
-YAT_ROOT ?= $(SOLEIL_ROOT)/sw-support/YAT
-PYLON_ROOT?=/opt/pylon
-GENICAM_ROOT?=$(PYLON_ROOT)
-
-
-
-
-# #=============================================================================
-# # RELEASE_TYPE
-# #=============================================================================
-# # - DEBUG     : debug symbols - no optimization
-# # - OPTIMIZED : no debug symbols - optimization level set to O2
-# #-----------------------------------------------------------------------------
-# RELEASE_TYPE = DEBUG
+#=============================================================================
+# RELEASE_TYPE
+#=============================================================================
+# - DEBUG     : debug symbols - no optimization
+# - OPTIMIZED : no debug symbols - optimization level set to O2
+#-----------------------------------------------------------------------------
+ifndef RELEASE_TYPE
+    RELEASE_TYPE = OPTIMIZED
+endif
 
 
 #=============================================================================
@@ -43,7 +46,9 @@ endif
 #	- $HOME/DeviceServers if OUTPUT_TYPE is DEVICE
 #	- ../bin for others
 #
-OUTPUT_DIR ?= .
+ifndef OUTPUT_DIR
+    OUTPUT_DIR = .
+endif
 
 #=============================================================================
 # PACKAGE_NAME is the name of the library/device/exe you want to build
@@ -63,10 +68,11 @@ PACKAGE_NAME = GrabPlugin_Basler
 # -I$(SOLEIL_ROOT)/sw-support/hkl/include for HKL library
 # ...etc
 #
-INC_DIR_USER=-I ../../../ImgGrabberSL/include \
-             -I $(YAT_ROOT)/include \
-             -I $(PYLON_ROOT)/include \
-             -I $(GENICAM_ROOT)/genicam/library/CPP/include
+
+INC_DIR_USER =  -I../../../ImgGrabberSL/include \
+                -I$(shell pkg-config --variable includedir yat) \
+                -I$(PYLON_ROOT)/include \
+                -I$(PYLON_ROOT)/genicam/library/CPP/include
 
 #=============================================================================
 # LIB_DIR_USER is the list of user library directories
@@ -78,7 +84,7 @@ INC_DIR_USER=-I ../../../ImgGrabberSL/include \
 # ...etc
 #
 
-ifeq ($(shell getos | grep _64$ | wc -w),1)
+ifeq ($(shell uname -m | grep _64$ | wc -w),1)
     LIB_DIR_USER= -L $(PYLON_ROOT)/lib64
 else
     LIB_DIR_USER= -L $(PYLON_ROOT)/lib
@@ -129,13 +135,13 @@ TANGO_REQUIRED = FALSE
 #
 #	include Standard TANGO compilation options
 #
-include $(SOLEIL_ROOT)/env/tango.opt
+include $(MAKE_ENV)/tango.opt
 
 
 #=============================================================================
 # SVC_OBJS is the list of all objects needed to make the output
 #
-SVC_OBJS = 	    $(OBJDIR)/BaslerGrabber.o
+LIB_OBJS = 	    $(OBJDIR)/BaslerGrabber.o
 
 
 #
@@ -146,4 +152,4 @@ SVC_OBJS = 	    $(OBJDIR)/BaslerGrabber.o
 #
 #	include common targets
 #
-include $(SOLEIL_ROOT)/env/common_target.opt
+include $(MAKE_ENV)/common_target.opt

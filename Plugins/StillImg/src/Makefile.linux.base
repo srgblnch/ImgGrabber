@@ -6,21 +6,9 @@
 #
 #
 #=============================================================================
-
-ifndef YAT_ROOT
-	YAT_ROOT = $(SOLEIL_ROOT)/sw-support/YAT
-endif
-
-ifndef ISL_ROOT
-	ISL_ROOT = $(SOLEIL_ROOT)/sw-support/ISL
-endif
-
-ifndef YAT4TANGO_ROOT
-	YAT4TANGO_ROOT = $(SOLEIL_ROOT)/sw-support/YAT4tango
-endif
-
-ifndef OPENCV_ROOT
-	OPENCV_ROOT = $(SOLEIL_ROOT)/sw-support/OpenCV
+ifndef MAKE_ENV
+    TANGO_HOME= $(shell pkg-config --variable prefix tango)
+    MAKE_ENV = $(TANGO_HOME)/share/pogo/preferences/
 endif
 
 # #=============================================================================
@@ -29,7 +17,9 @@ endif
 # # - DEBUG     : debug symbols - no optimization
 # # - OPTIMIZED : no debug symbols - optimization level set to O2
 # #-----------------------------------------------------------------------------
-# RELEASE_TYPE = DEBUG
+ifndef RELEASE_TYPE
+    RELEASE_TYPE = OPTIMIZED
+endif
 
 
 #=============================================================================
@@ -41,8 +31,9 @@ endif
 #   - 'SIMPLE_EXE' for an executable with no dependency (for exemple the test tool
 #                of a library with no Tango dependencies)
 #
-
-OUTPUT_TYPE = SHARED_LIB
+ifndef OUTPUT_TYPE
+    OUTPUT_TYPE = SHARED_LIB
+endif
 
 #=============================================================================
 # OUTPUT_DIR  is the directory which contains the build result.
@@ -50,7 +41,9 @@ OUTPUT_TYPE = SHARED_LIB
 #	- $HOME/DeviceServers if OUTPUT_TYPE is DEVICE
 #	- ../bin for others
 #
-OUTPUT_DIR ?= .
+ifndef OUTPUT_DIR
+    OUTPUT_DIR = .
+endif
 
 #=============================================================================
 # PACKAGE_NAME is the name of the library/device/exe you want to build
@@ -70,14 +63,17 @@ PACKAGE_NAME = GrabPlugin_StillImg
 # -I$(SOLEIL_ROOT)/sw-support/hkl/include for HKL library
 # ...etc
 #
-INC_DIR_USER=-I ../../../ImgGrabberSL/include \
-             -I $(IBA_ROOT)/src \
-             -I $(ISL_ROOT)/isl_include \
-             -I $(OPENCV_ROOT)/include \
-             -I $(OPENCV_ROOT)/include/opencv \
-             -I $(YAT_ROOT)/yat_include \
-             -I $(YAT4TANGO_ROOT)/yat4tango_include \
-             -I $(PYLON_ROOT)/include
+
+# TODO: pylon will be installed/linked in /opt
+INC_DIR_USER =  -I../../../ImgGrabberSL/include \
+                -I$(shell pkg-config --variable includedir imgbeamanalyzer) \
+                -I$(shell pkg-config --variable includedir ISL) \
+                -I$(shell pkg-config --variable includedir_new opencv) \
+                -I$(shell pkg-config --variable includedir_old opencv) \
+                -I$(shell pkg-config --variable includedir yat) \
+                -I$(shell pkg-config --variable includedir yat4tango) \
+                -I$(shell pkg-config --variable includedir pylon) \
+                -I/opt/pylon/include
 
 #=============================================================================
 # LIB_DIR_USER is the list of user library directories
@@ -130,21 +126,21 @@ TANGO_REQUIRED = FALSE
 #
 #	include Standard TANGO compilation options
 #
-include $(SOLEIL_ROOT)/env/tango.opt
+include $(MAKE_ENV)/tango.opt
 
 
 #=============================================================================
 # SVC_OBJS is the list of all objects needed to make the output
 #
-SVC_OBJS = 	    $(OBJDIR)/StillImgGrabber.o
+LIB_OBJS = 	    $(OBJDIR)/StillImgGrabber.o
 
 
 #
 # Verbose mode
 #
-.SILENT:
+#.SILENT:
 
 #
 #	include common targets
 #
-include $(SOLEIL_ROOT)/env/common_target.opt
+include $(MAKE_ENV)/common_target.opt

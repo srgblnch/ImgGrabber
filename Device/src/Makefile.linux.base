@@ -7,24 +7,9 @@
 #
 #=============================================================================
 
-ifndef YAT_ROOT
-	YAT_ROOT = $(SOLEIL_ROOT)/sw-support/YAT
-endif
-
-ifndef ISL_ROOT
-	ISL_ROOT = $(SOLEIL_ROOT)/sw-support/ISL
-endif
-
-ifndef YAT4TANGO_ROOT
-	YAT4TANGO_ROOT = $(SOLEIL_ROOT)/sw-support/YAT4tango
-endif
-
-ifndef OPENCV_ROOT
-	OPENCV_ROOT = $(SOLEIL_ROOT)/sw-support/OpenCV
-endif
-
-ifndef IBA_ROOT
-	IBA_ROOT = ../../ImgBeamAnalyzer
+ifndef MAKE_ENV
+    TANGO_HOME= $(shell pkg-config --variable prefix tango)
+    MAKE_ENV = $(TANGO_HOME)/share/pogo/preferences/
 endif
 
 # #=============================================================================
@@ -33,7 +18,10 @@ endif
 # # - DEBUG     : debug symbols - no optimization
 # # - OPTIMIZED : no debug symbols - optimization level set to O2
 # #-----------------------------------------------------------------------------
-RELEASE_TYPE ?= OPTIMIZED
+
+ifndef RELEASE_TYPE
+    RELEASE_TYPE = OPTIMIZED
+endif
 
 #=============================================================================
 # OUTPUT_TYPE can be one of the following :
@@ -73,14 +61,12 @@ PACKAGE_NAME = ImgGrabber
 # -I$(SOLEIL_ROOT)/sw-support/hkl/include for HKL library
 # ...etc
 #
-INC_DIR_USER=-I ../../ImgGrabberSL/include \
-             -I $(IBA_ROOT)/src \
-             -I $(ISL_ROOT)/include \
-             -I $(OPENCV_ROOT)/include/opencv \
-             -I $(YAT_ROOT)/include \
-             -I $(YAT4TANGO_ROOT)/include \
-             -I $(TANGO_ROOT)/include \
-             -I $(TANGO_ROOT)/include/tango
+INC_DIR_USER =  -I../../ImgGrabberSL/include \
+                -I$(shell pkg-config --variable includedir imgbeamanalyzer) \
+                -I$(shell pkg-config --variable includedir ISL) \
+                -I$(shell pkg-config --variable includedir_old opencv) \
+                -I$(shell pkg-config --variable includedir yat) \
+                -I$(shell pkg-config --variable includedir yat4tango)
 
 #=============================================================================
 # LIB_DIR_USER is the list of user library directories
@@ -91,13 +77,11 @@ INC_DIR_USER=-I ../../ImgGrabberSL/include \
 # -L $(SOLEIL_ROOT)/sw-support/hkl/lib for HKL library
 # ...etc
 #
-LIB_DIR_USER=-L $(ISL_ROOT)/lib/shared/`getos` \
-             -L $(YAT_ROOT)/lib \
-             -L $(YAT4TANGO_ROOT)/lib \
-             -L $(IBA_ROOT)/lib/`getos` \
-             -L $(OPENCV_ROOT)/lib \
-             -L $(OPENCV_ROOT)/lib64
-             
+LIB_DIR_USER= $(shell pkg-config --libs-only-L ISL) \
+              $(shell pkg-config --libs-only-L yat) \
+              $(shell pkg-config --libs-only-L yat4tango) \
+              $(shell pkg-config --libs-only-L imgbeamanalyzer) \
+              $(shell pkg-config --libs-only-L opencv) \
 
 
 #=============================================================================
@@ -115,16 +99,19 @@ LIB_DIR_USER=-L $(ISL_ROOT)/lib/shared/`getos` \
 # -lASL for ASL
 # -lHKL for HKL
 #
-
-LFLAGS_USR+= -lImgBeamAnalyzer -lISL -lcxcore -lcv -lhighgui
+LFLAGS_USR= $(shell pkg-config --libs-only-l imgbeamanalyzer) \
+            $(shell pkg-config --libs-only-l ISL) \
+            $(shell pkg-config --libs-only-l opencv)
 
 ifeq ($(RELEASE_TYPE), OPTIMIZED)
-	LFLAGS_USR += -lyat -lyat4tango
+	LFLAGS_USR += $(shell pkg-config --libs-only-l yat) \
+                  $(shell pkg-config --libs-only-l yat4tango)
 else
+    TODO: Adapt debug options
 	LFLAGS_USR += -lyatd -lyat4tangod
 endif
 
-ifeq ($(shell getos | grep _64$ | wc -w),1)
+ifeq ($(shell uname -m | grep _64$ | wc -w),1)
 	CXXFLAGS_USER += -D__64BITS_PLATFORM__
 endif
 
@@ -152,7 +139,7 @@ TANGO_REQUIRED = TRUE
 #
 #	include Standard TANGO compilation options
 #
-include $(SOLEIL_ROOT)/env/tango.opt
+include $(MAKE_ENV)/tango.opt
 
 
 #=============================================================================
@@ -178,4 +165,4 @@ SVC_OBJS =      $(OBJDIR)/ClassFactory.o  \
 #
 #	include common targets
 #
-include $(SOLEIL_ROOT)/env/common_target.opt
+include $(MAKE_ENV)/common_target.opt
